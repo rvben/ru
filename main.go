@@ -20,10 +20,14 @@ import (
 var versionCache = make(map[string]string)
 var cacheMutex sync.Mutex
 
+// Verbose logging flag
+var verbose bool
+
 func main() {
 	// CLI Flags
 	path := flag.String("path", ".", "Path to the directory to search for requirements*.txt files")
 	help := flag.Bool("help", false, "Show help message")
+	flag.BoolVar(&verbose, "verbose", false, "Enable verbose logging")
 	flag.Parse()
 
 	if *help {
@@ -92,7 +96,7 @@ func updateRequirementsFile(filePath string) {
 
 		packageName := matches[1]
 		versionConstraints := matches[2]
-		log.Println("Processing package:", packageName)
+		verboseLog("Processing package:", packageName)
 
 		latestVersion := getCachedLatestVersion(packageName)
 		if latestVersion == "" {
@@ -103,7 +107,7 @@ func updateRequirementsFile(filePath string) {
 
 		if versionConstraints != "" {
 			if isVersionInRange(latestVersion, versionConstraints) {
-				log.Println("Latest version is within the specified range:", latestVersion)
+				verboseLog("Latest version is within the specified range:", latestVersion)
 				updatedLines = append(updatedLines, line)
 			} else {
 				log.Printf("Warning: Latest version %s for package %s is not within the specified range (%s)\n", latestVersion, packageName, versionConstraints)
@@ -112,7 +116,7 @@ func updateRequirementsFile(filePath string) {
 		} else {
 			updatedLine := fmt.Sprintf("%s==%s", packageName, latestVersion)
 			updatedLines = append(updatedLines, updatedLine)
-			log.Println("Updated:", line, "->", updatedLine)
+			verboseLog("Updated:", line, "->", updatedLine)
 		}
 	}
 
@@ -158,7 +162,7 @@ func getCachedLatestVersion(packageName string) string {
 	cacheMutex.Unlock()
 
 	if found {
-		log.Println("Cache hit for package:", packageName, "version:", version)
+		verboseLog("Cache hit for package:", packageName, "version:", version)
 		return version
 	}
 
@@ -218,4 +222,11 @@ func isVersionInRange(latestVersion, versionConstraints string) bool {
 	}
 
 	return constraints(latestSemVer)
+}
+
+// verboseLog prints log messages only if verbose mode is enabled
+func verboseLog(v ...interface{}) {
+	if verbose {
+		log.Println(v...)
+	}
 }
