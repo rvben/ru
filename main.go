@@ -14,12 +14,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/blang/semver/v4"
+	"github.com/blang/semver"
+	"golang.org/x/net/html"
 	"gopkg.in/ini.v1"
 )
 
 // Define the version of the tool
-const version = "0.1.4"
+const version = "0.1.5"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -30,6 +31,10 @@ var verbose bool
 
 // Default PyPI URL
 var pypiURL = "https://pypi.org/pypi"
+
+// Flag to indicate whether a custom index-url is being used and its type
+var isCustomIndexURL bool
+var isCodeArtifact bool
 
 // Counters for summary output
 var filesUpdated int
@@ -113,7 +118,14 @@ func setCustomIndexURL() {
 
 			// Try to get the index-url from the [global] section
 			if indexURL := cfg.Section("global").Key("index-url").String(); indexURL != "" {
-				pypiURL = strings.TrimSuffix(indexURL, "/") + "/pypi"
+				pypiURL = strings.TrimSuffix(indexURL, "/")
+				isCustomIndexURL = true
+
+				// Check if it's an AWS CodeArtifact repository
+				if strings.Contains(pypiURL, ".codeartifact.") {
+					isCodeArtifact = true
+				}
+
 				verboseLog("Using custom index URL from pip.conf:", pypiURL)
 				return
 			}
@@ -280,7 +292,19 @@ func getCachedLatestVersion(packageName string) string {
 }
 
 func getLatestVersionFromPyPI(packageName string) string {
-	url := fmt.Sprintf("%s/%s/json", pypiURL, packageName)
+	var url string
+	if isCustomIndexURL {
+		// Handle custom index URL
+		if isCodeArtifact {
+			url = fmt.Sprintf("%s/%s/", pypiURL, packageName)
+		} else {
+			url = fmt.Sprintf("%s/%s/json", pypiURL, packageName)
+		}
+	} else {
+		// Default PyPI URL
+		url = fmt.Sprintf("%s/%s/json", pypiURL, packageName)
+	}
+
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Println("Error fetching version from PyPI:", err)
@@ -291,6 +315,11 @@ func getLatestVersionFromPyPI(packageName string) string {
 	if resp.StatusCode != http.StatusOK {
 		log.Println("PyPI returned non-OK status:", resp.Status)
 		return ""
+	}
+
+	if isCodeArtifact {
+		// Parse the HTML page to extract the latest version
+		return parseHTMLForLatestVersion(resp)
 	}
 
 	type VersionInfo struct {
@@ -306,6 +335,39 @@ func getLatestVersionFromPyPI(packageName string) string {
 	}
 
 	return versionInfo.Info.Version
+}
+
+func parseHTMLForLatestVersion(resp *http.Response) string {
+	// Parse the HTML to find the latest version
+	z := html.NewTokenizer(resp.Body)
+	var latestVersion string
+
+	for {
+		tt := z.Next()
+		switch {
+		case tt == html.ErrorToken:
+			// End of the document, we're done
+			return latestVersion
+		case tt == html.StartTagToken:
+			t := z.Token()
+
+			// Check for <a> tags with a href attribute that contains the version
+			if t.Data == "a" {
+				for _, a := range t.Attr {
+					if a.Key == "href" {
+						// The version is typically the text in the href attribute like "/packages/1.2.3/"
+						parts := strings.Split(strings.Trim(a.Val, "/"), "/")
+						if len(parts) > 0 {
+							version := parts[len(parts)-1]
+							if version > latestVersion {
+								latestVersion = version
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 func checkVersionConstraints(latestVersion, versionConstraints string) bool {
