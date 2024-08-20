@@ -14,7 +14,11 @@ import (
 	"sync"
 
 	"github.com/blang/semver/v4"
+	"gopkg.in/ini.v1"
 )
+
+// Define the version of the tool
+const version = "0.1.4"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -23,6 +27,14 @@ var cacheMutex sync.Mutex
 // Verbose logging flag
 var verbose bool
 
+// Default PyPI URL
+var pypiURL = "https://pypi.org/pypi"
+
+// Counters for summary output
+var filesUpdated int
+var modulesUpdated int
+var filesUnchanged int
+
 func main() {
 	// CLI Flags
 	path := flag.String("path", ".", "Path to the directory to search for requirements*.txt files")
@@ -30,13 +42,22 @@ func main() {
 	flag.BoolVar(&verbose, "verbose", false, "Enable verbose logging")
 	flag.Parse()
 
+	// Handle the version command
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Printf("ru %s\n", version)
+		return
+	}
+
+	// Check if ~/.config/pip/pip.conf or /etc/pip.conf exists and use the index-url if defined
+	setCustomIndexURL()
+
 	if *help {
 		flag.Usage()
 		return
 	}
 
-	// Start logging
-	log.Println("Starting to process the directory:", *path)
+	// Start logging (only in verbose mode)
+	verboseLog("Starting to process the directory:", *path)
 
 	// Walk the directory to find requirements*.txt files
 	err := filepath.Walk(*path, func(filePath string, info os.FileInfo, err error) error {
@@ -52,7 +73,7 @@ func main() {
 			return err
 		}
 		if matched {
-			log.Println("Found:", filePath)
+			verboseLog("Found:", filePath)
 			updateRequirementsFile(filePath)
 		}
 		return nil
@@ -62,7 +83,43 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println("Completed processing.")
+	// Summary output
+	if filesUpdated > 0 {
+		fmt.Printf("%d file updated and %d modules updated\n", filesUpdated, modulesUpdated)
+	} else {
+		fmt.Printf("%d files left unchanged\n", filesUnchanged)
+	}
+
+	verboseLog("Completed processing.")
+}
+
+func setCustomIndexURL() {
+	// Define potential locations for pip.conf
+	potentialLocations := []string{
+		filepath.Join(os.Getenv("HOME"), ".config", "pip", "pip.conf"),
+		"/etc/pip.conf",
+	}
+
+	for _, configPath := range potentialLocations {
+		if _, err := os.Stat(configPath); err == nil {
+			// File exists, attempt to load and parse it
+			verboseLog("Found pip.conf at", configPath)
+			cfg, err := ini.Load(configPath)
+			if err != nil {
+				log.Println("Error reading pip.conf:", err)
+				return
+			}
+
+			// Try to get the index-url from the [global] section
+			if indexURL := cfg.Section("global").Key("index-url").String(); indexURL != "" {
+				pypiURL = strings.TrimSuffix(indexURL, "/") + "/pypi"
+				verboseLog("Using custom index URL from pip.conf:", pypiURL)
+				return
+			}
+		}
+	}
+
+	verboseLog("No custom index-url found, using default PyPI URL.")
 }
 
 func updateRequirementsFile(filePath string) {
@@ -78,6 +135,7 @@ func updateRequirementsFile(filePath string) {
 
 	// This variable will track whether the file ends with a newline
 	endsWithNewline := false
+	modulesUpdatedInFile := 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -106,7 +164,17 @@ func updateRequirementsFile(filePath string) {
 		}
 
 		if versionConstraints != "" {
-			if isVersionInRange(latestVersion, versionConstraints) {
+			// Update directly to the latest version if the constraint is an exact match
+			if strings.HasPrefix(versionConstraints, "==") {
+				if strings.TrimPrefix(versionConstraints, "==") != latestVersion {
+					updatedLine := fmt.Sprintf("%s==%s", packageName, latestVersion)
+					updatedLines = append(updatedLines, updatedLine)
+					modulesUpdatedInFile++
+					verboseLog("Updated exact match:", line, "->", updatedLine)
+				} else {
+					updatedLines = append(updatedLines, line)
+				}
+			} else if checkVersionConstraints(latestVersion, versionConstraints) {
 				verboseLog("Latest version is within the specified range:", latestVersion)
 				updatedLines = append(updatedLines, line)
 			} else {
@@ -114,15 +182,27 @@ func updateRequirementsFile(filePath string) {
 				updatedLines = append(updatedLines, line)
 			}
 		} else {
-			updatedLine := fmt.Sprintf("%s==%s", packageName, latestVersion)
-			updatedLines = append(updatedLines, updatedLine)
-			verboseLog("Updated:", line, "->", updatedLine)
+			if !strings.HasSuffix(line, "=="+latestVersion) {
+				updatedLine := fmt.Sprintf("%s==%s", packageName, latestVersion)
+				updatedLines = append(updatedLines, updatedLine)
+				modulesUpdatedInFile++
+				verboseLog("Updated:", line, "->", updatedLine)
+			} else {
+				updatedLines = append(updatedLines, line)
+			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		log.Println("Error reading file:", err)
 		return
+	}
+
+	if modulesUpdatedInFile > 0 {
+		filesUpdated++
+		modulesUpdated += modulesUpdatedInFile
+	} else {
+		filesUnchanged++
 	}
 
 	// Check if the original file ends with a newline
@@ -166,7 +246,7 @@ func getCachedLatestVersion(packageName string) string {
 		return version
 	}
 
-	// If not found in cache, fetch from PyPI
+	// If not found in cache, fetch from custom or default PyPI
 	version = getLatestVersionFromPyPI(packageName)
 
 	// Cache the result
@@ -180,7 +260,7 @@ func getCachedLatestVersion(packageName string) string {
 }
 
 func getLatestVersionFromPyPI(packageName string) string {
-	url := fmt.Sprintf("https://pypi.org/pypi/%s/json", packageName)
+	url := fmt.Sprintf("%s/%s/json", pypiURL, packageName)
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Println("Error fetching version from PyPI:", err)
@@ -208,20 +288,33 @@ func getLatestVersionFromPyPI(packageName string) string {
 	return versionInfo.Info.Version
 }
 
-func isVersionInRange(latestVersion, versionConstraints string) bool {
-	constraints, err := semver.ParseRange(versionConstraints)
-	if err != nil {
-		log.Println("Error parsing version constraints:", err)
-		return false
+func checkVersionConstraints(latestVersion, versionConstraints string) bool {
+	if strings.HasPrefix(versionConstraints, "==") {
+		// Handle exact version match with "=="
+		return latestVersion == strings.TrimPrefix(versionConstraints, "==")
 	}
 
-	latestSemVer, err := semver.ParseTolerant(latestVersion)
-	if err != nil {
-		log.Println("Error parsing latest version:", err)
-		return false
+	// Split constraints by comma
+	constraintsList := strings.Split(versionConstraints, ",")
+	for _, constraint := range constraintsList {
+		parsedConstraint, err := semver.ParseRange(strings.TrimSpace(constraint))
+		if err != nil {
+			log.Println("Error parsing version constraints:", err)
+			return false
+		}
+
+		latestSemVer, err := semver.ParseTolerant(latestVersion)
+		if err != nil {
+			log.Println("Error parsing latest version:", err)
+			return false
+		}
+
+		if !parsedConstraint(latestSemVer) {
+			return false
+		}
 	}
 
-	return constraints(latestSemVer)
+	return true
 }
 
 // verboseLog prints log messages only if verbose mode is enabled
