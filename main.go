@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/blang/semver/v4"
 )
 
 // Cache to store the latest version of packages
@@ -69,6 +71,10 @@ func updateRequirementsFile(filePath string) {
 
 	var updatedLines []string
 	scanner := bufio.NewScanner(file)
+
+	// This variable will track whether the file ends with a newline
+	endsWithNewline := false
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -76,8 +82,8 @@ func updateRequirementsFile(filePath string) {
 			continue
 		}
 
-		// Extract the package name using regex
-		re := regexp.MustCompile(`^([a-zA-Z0-9-_]+)([<>=!~]*)(.*)`)
+		// Extract the package name and version constraints using regex
+		re := regexp.MustCompile(`^([a-zA-Z0-9-_]+)([<>=!~]+.*)?`)
 		matches := re.FindStringSubmatch(line)
 		if len(matches) < 2 {
 			log.Println("Invalid line format:", line)
@@ -85,6 +91,7 @@ func updateRequirementsFile(filePath string) {
 		}
 
 		packageName := matches[1]
+		versionConstraints := matches[2]
 		log.Println("Processing package:", packageName)
 
 		latestVersion := getCachedLatestVersion(packageName)
@@ -94,9 +101,19 @@ func updateRequirementsFile(filePath string) {
 			continue
 		}
 
-		updatedLine := fmt.Sprintf("%s==%s", packageName, latestVersion)
-		updatedLines = append(updatedLines, updatedLine)
-		log.Println("Updated:", line, "->", updatedLine)
+		if versionConstraints != "" {
+			if isVersionInRange(latestVersion, versionConstraints) {
+				log.Println("Latest version is within the specified range:", latestVersion)
+				updatedLines = append(updatedLines, line)
+			} else {
+				log.Printf("Warning: Latest version %s for package %s is not within the specified range (%s)\n", latestVersion, packageName, versionConstraints)
+				updatedLines = append(updatedLines, line)
+			}
+		} else {
+			updatedLine := fmt.Sprintf("%s==%s", packageName, latestVersion)
+			updatedLines = append(updatedLines, updatedLine)
+			log.Println("Updated:", line, "->", updatedLine)
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -104,8 +121,31 @@ func updateRequirementsFile(filePath string) {
 		return
 	}
 
+	// Check if the original file ends with a newline
+	fileInfo, err := file.Stat()
+	if err == nil {
+		fileSize := fileInfo.Size()
+		if fileSize > 0 {
+			// Seek to the last byte of the file
+			file.Seek(fileSize-1, 0)
+			buffer := make([]byte, 1)
+			file.Read(buffer)
+			if buffer[0] == '\n' {
+				endsWithNewline = true
+			}
+		}
+	}
+
+	// Join the updated lines with newlines
+	output := strings.Join(updatedLines, "\n")
+
+	// If the original file ended with a newline, ensure the output does too
+	if endsWithNewline {
+		output += "\n"
+	}
+
 	// Write the updated lines back to the file
-	err = os.WriteFile(filePath, []byte(strings.Join(updatedLines, "\n")), 0644)
+	err = os.WriteFile(filePath, []byte(output), 0644)
 	if err != nil {
 		log.Println("Error writing updated file:", err)
 	}
@@ -162,4 +202,20 @@ func getLatestVersionFromPyPI(packageName string) string {
 	}
 
 	return versionInfo.Info.Version
+}
+
+func isVersionInRange(latestVersion, versionConstraints string) bool {
+	constraints, err := semver.ParseRange(versionConstraints)
+	if err != nil {
+		log.Println("Error parsing version constraints:", err)
+		return false
+	}
+
+	latestSemVer, err := semver.ParseTolerant(latestVersion)
+	if err != nil {
+		log.Println("Error parsing latest version:", err)
+		return false
+	}
+
+	return constraints(latestSemVer)
 }
