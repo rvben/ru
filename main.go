@@ -137,9 +137,11 @@ func updateRequirementsFile(filePath string) {
 	// This variable will track whether the file ends with a newline
 	endsWithNewline := false
 	modulesUpdatedInFile := 0
+	var originalLines []string
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		originalLines = append(originalLines, line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			updatedLines = append(updatedLines, line)
 			continue
@@ -202,7 +204,8 @@ func updateRequirementsFile(filePath string) {
 	// Sort the lines alphabetically before writing
 	sort.Strings(updatedLines)
 
-	if modulesUpdatedInFile > 0 {
+	// Check if sorting or updating changed the file
+	if modulesUpdatedInFile > 0 || !equalStrings(originalLines, updatedLines) {
 		filesUpdated++
 		modulesUpdated += modulesUpdatedInFile
 	} else {
@@ -237,6 +240,19 @@ func updateRequirementsFile(filePath string) {
 	if err != nil {
 		log.Println("Error writing updated file:", err)
 	}
+}
+
+// Helper function to compare two string slices
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func getCachedLatestVersion(packageName string) string {
