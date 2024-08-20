@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -197,6 +198,9 @@ func updateRequirementsFile(filePath string) {
 		log.Println("Error reading file:", err)
 		return
 	}
+
+	// Sort the lines alphabetically before writing
+	sort.Strings(updatedLines)
 
 	if modulesUpdatedInFile > 0 {
 		filesUpdated++
