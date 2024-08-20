@@ -20,7 +20,7 @@ import (
 )
 
 // Define the version of the tool
-const version = "0.1.5"
+const version = "0.1.6"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -355,13 +355,12 @@ func parseHTMLForLatestVersion(resp *http.Response) string {
 			if t.Data == "a" {
 				for _, a := range t.Attr {
 					if a.Key == "href" {
-						// The version is typically the text in the href attribute like "/packages/1.2.3/"
-						parts := strings.Split(strings.Trim(a.Val, "/"), "/")
-						if len(parts) > 0 {
-							version := parts[len(parts)-1]
-							if version > latestVersion {
-								latestVersion = version
-							}
+						// The version is typically the text in the href attribute like "/1.0.0/"
+						versionPath := strings.Trim(a.Val, "/")
+						parts := strings.Split(versionPath, "/")
+						version := parts[0]
+						if version > latestVersion {
+							latestVersion = version
 						}
 					}
 				}
