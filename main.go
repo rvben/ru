@@ -20,7 +20,7 @@ import (
 )
 
 // Define the version of the tool
-const version = "0.1.6"
+const version = "0.1.7"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -304,6 +304,9 @@ func getLatestVersionFromPyPI(packageName string) string {
 		// Default PyPI URL
 		url = fmt.Sprintf("%s/%s/json", pypiURL, packageName)
 	}
+
+	// Log the URL if verbose mode is enabled
+	verboseLog("Calling URL:", url)
 
 	resp, err := http.Get(url)
 	if err != nil {
