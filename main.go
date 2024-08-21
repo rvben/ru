@@ -24,7 +24,7 @@ import (
 )
 
 // Define the version of the tool
-const version = "0.1.11"
+const version = "0.1.12"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -178,19 +178,20 @@ func updateRequirementsFile(filePath string) {
 	}
 	defer file.Close()
 
-	var updatedLines []string
-	scanner := bufio.NewScanner(file)
-
-	// This variable will track whether the file ends with a newline
-	endsWithNewline := false
-	modulesUpdatedInFile := 0
+	// Use a map to store unique package lines
+	uniqueLines := make(map[string]struct{})
 	var originalLines []string
+	var sortedLines []string
+	modulesUpdatedInFile := 0
+	endsWithNewline := false
 
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
 		originalLines = append(originalLines, line)
 		if line == "" || strings.HasPrefix(line, "#") {
-			updatedLines = append(updatedLines, line)
+			// Directly add comments or empty lines
+			sortedLines = append(sortedLines, line)
 			continue
 		}
 
@@ -209,38 +210,40 @@ func updateRequirementsFile(filePath string) {
 		latestVersion := getCachedLatestVersion(packageName)
 		if latestVersion == "" {
 			log.Println("Failed to get latest version for package:", packageName)
-			updatedLines = append(updatedLines, line)
+			sortedLines = append(sortedLines, line)
 			continue
 		}
 
+		var updatedLine string
 		if versionConstraints != "" {
 			// Update directly to the latest version if the constraint is an exact match
 			if strings.HasPrefix(versionConstraints, "==") {
 				if strings.TrimPrefix(versionConstraints, "==") != latestVersion {
-					updatedLine := fmt.Sprintf("%s==%s", packageName, latestVersion)
-					updatedLines = append(updatedLines, updatedLine)
+					updatedLine = fmt.Sprintf("%s==%s", packageName, latestVersion)
 					modulesUpdatedInFile++
 					verboseLog("Updated exact match:", line, "->", updatedLine)
 				} else {
-					updatedLines = append(updatedLines, line)
+					updatedLine = line
 				}
 			} else if checkVersionConstraints(latestVersion, versionConstraints) {
 				verboseLog("Latest version is within the specified range:", latestVersion)
-				updatedLines = append(updatedLines, line)
+				updatedLine = line
 			} else {
 				log.Printf("Warning: Latest version %s for package %s is not within the specified range (%s)\n", latestVersion, packageName, versionConstraints)
-				updatedLines = append(updatedLines, line)
+				updatedLine = line
 			}
 		} else {
 			if !strings.HasSuffix(line, "=="+latestVersion) {
-				updatedLine := fmt.Sprintf("%s==%s", packageName, latestVersion)
-				updatedLines = append(updatedLines, updatedLine)
+				updatedLine = fmt.Sprintf("%s==%s", packageName, latestVersion)
 				modulesUpdatedInFile++
 				verboseLog("Updated:", line, "->", updatedLine)
 			} else {
-				updatedLines = append(updatedLines, line)
+				updatedLine = line
 			}
 		}
+
+		// Add the updated line to the map to ensure uniqueness
+		uniqueLines[updatedLine] = struct{}{}
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -248,16 +251,11 @@ func updateRequirementsFile(filePath string) {
 		return
 	}
 
-	// Sort the lines alphabetically before writing
-	sort.Strings(updatedLines)
-
-	// Check if sorting or updating changed the file
-	if modulesUpdatedInFile > 0 || !equalStrings(originalLines, updatedLines) {
-		filesUpdated++
-		modulesUpdated += modulesUpdatedInFile
-	} else {
-		filesUnchanged++
+	// Convert the map to a slice and sort it
+	for line := range uniqueLines {
+		sortedLines = append(sortedLines, line)
 	}
+	sort.Strings(sortedLines)
 
 	// Check if the original file ends with a newline
 	fileInfo, err := file.Stat()
@@ -274,15 +272,23 @@ func updateRequirementsFile(filePath string) {
 		}
 	}
 
-	// Join the updated lines with newlines
-	output := strings.Join(updatedLines, "\n")
+	// Join the sorted lines with newlines
+	output := strings.Join(sortedLines, "\n")
 
 	// If the original file ended with a newline, ensure the output does too
 	if endsWithNewline {
 		output += "\n"
 	}
 
-	// Write the updated lines back to the file
+	// Check if sorting or updating changed the file
+	if modulesUpdatedInFile > 0 || !equalStrings(originalLines, sortedLines) {
+		filesUpdated++
+		modulesUpdated += modulesUpdatedInFile
+	} else {
+		filesUnchanged++
+	}
+
+	// Write the sorted and unique lines back to the file
 	err = os.WriteFile(filePath, []byte(output), 0644)
 	if err != nil {
 		log.Println("Error writing updated file:", err)
