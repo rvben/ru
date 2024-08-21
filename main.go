@@ -16,15 +16,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blang/semver"
-
 	semv "github.com/Masterminds/semver/v3"
+	"github.com/blang/semver"
 	"golang.org/x/net/html"
 	"gopkg.in/ini.v1"
 )
 
 // Define the version of the tool
-const version = "0.1.12"
+const version = "0.1.13"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -180,18 +179,17 @@ func updateRequirementsFile(filePath string) {
 
 	// Use a map to store unique package lines
 	uniqueLines := make(map[string]struct{})
-	var originalLines []string
 	var sortedLines []string
 	modulesUpdatedInFile := 0
-	endsWithNewline := false
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := scanner.Text()
-		originalLines = append(originalLines, line)
+		line := strings.TrimSpace(scanner.Text()) // Trim whitespace
 		if line == "" || strings.HasPrefix(line, "#") {
-			// Directly add comments or empty lines
-			sortedLines = append(sortedLines, line)
+			// Ignore empty lines but keep comments
+			if strings.HasPrefix(line, "#") {
+				sortedLines = append(sortedLines, line)
+			}
 			continue
 		}
 
@@ -257,41 +255,24 @@ func updateRequirementsFile(filePath string) {
 	}
 	sort.Strings(sortedLines)
 
-	// Check if the original file ends with a newline
-	fileInfo, err := file.Stat()
-	if err == nil {
-		fileSize := fileInfo.Size()
-		if fileSize > 0 {
-			// Seek to the last byte of the file
-			file.Seek(fileSize-1, 0)
-			buffer := make([]byte, 1)
-			file.Read(buffer)
-			if buffer[0] == '\n' {
-				endsWithNewline = true
-			}
-		}
-	}
-
-	// Join the sorted lines with newlines
+	// Join the sorted and unique lines with newlines
 	output := strings.Join(sortedLines, "\n")
 
-	// If the original file ended with a newline, ensure the output does too
-	if endsWithNewline {
-		output += "\n"
-	}
-
-	// Check if sorting or updating changed the file
-	if modulesUpdatedInFile > 0 || !equalStrings(originalLines, sortedLines) {
-		filesUpdated++
-		modulesUpdated += modulesUpdatedInFile
-	} else {
-		filesUnchanged++
-	}
+	// Ensure the output ends with a newline
+	output += "\n"
 
 	// Write the sorted and unique lines back to the file
 	err = os.WriteFile(filePath, []byte(output), 0644)
 	if err != nil {
 		log.Println("Error writing updated file:", err)
+	}
+
+	// Update counters based on changes
+	if modulesUpdatedInFile > 0 || !equalStrings(sortedLines, uniqueLinesAsSlice(uniqueLines)) {
+		filesUpdated++
+		modulesUpdated += modulesUpdatedInFile
+	} else {
+		filesUnchanged++
 	}
 }
 
@@ -306,6 +287,15 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// Helper function to convert map to slice
+func uniqueLinesAsSlice(uniqueLines map[string]struct{}) []string {
+	var lines []string
+	for line := range uniqueLines {
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func getCachedLatestVersion(packageName string) string {
