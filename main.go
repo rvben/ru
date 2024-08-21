@@ -15,6 +15,8 @@ import (
 	"sync"
 
 	"github.com/blang/semver"
+
+	semv "github.com/Masterminds/semver/v3"
 	"golang.org/x/net/html"
 	"gopkg.in/ini.v1"
 )
@@ -341,16 +343,22 @@ func getLatestVersionFromPyPI(packageName string) string {
 }
 
 func parseHTMLForLatestVersion(resp *http.Response) string {
-	// Parse the HTML to find the latest version
-	z := html.NewTokenizer(resp.Body)
-	var latestVersion string
+	var versions []*semv.Version
 
+	z := html.NewTokenizer(resp.Body)
 	for {
 		tt := z.Next()
 		switch {
 		case tt == html.ErrorToken:
-			// End of the document, we're done
-			return latestVersion
+			// End of the document, return the latest version found
+			if len(versions) == 0 {
+				return ""
+			}
+
+			// Sort the versions using semantic versioning
+			sort.Sort(semv.Collection(versions))
+			return versions[len(versions)-1].String()
+
 		case tt == html.StartTagToken:
 			t := z.Token()
 
@@ -358,12 +366,15 @@ func parseHTMLForLatestVersion(resp *http.Response) string {
 			if t.Data == "a" {
 				for _, a := range t.Attr {
 					if a.Key == "href" {
-						// The version is typically the text in the href attribute like "/1.0.0/"
+						// Extract the version string from the href attribute
 						versionPath := strings.Trim(a.Val, "/")
 						parts := strings.Split(versionPath, "/")
-						version := parts[0]
-						if version > latestVersion {
-							latestVersion = version
+						versionStr := parts[0]
+
+						// Parse the version using semver
+						version, err := semv.NewVersion(versionStr)
+						if err == nil {
+							versions = append(versions, version)
 						}
 					}
 				}
