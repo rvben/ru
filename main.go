@@ -47,60 +47,91 @@ var filesUnchanged int
 
 func main() {
 	// CLI Flags
-	path := flag.String("path", ".", "Path to the directory to search for requirements*.txt files")
-	help := flag.Bool("help", false, "Show help message")
-	flag.BoolVar(&verbose, "verbose", false, "Enable verbose logging")
-	flag.Parse()
-
-	// Handle the version command
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Printf("ru %s\n", version)
-		return
+	flag.Usage = func() {
+		fmt.Println("Usage:")
+		fmt.Println("  ru update [path]   Update requirements*.txt files in the specified path (default: current directory)")
+		fmt.Println("  ru version         Show the version of the tool")
+		fmt.Println("  ru help            Show this help message")
 	}
+	verboseFlag := flag.Bool("verbose", false, "Enable verbose logging")
 
-	// Check if ~/.config/pip/pip.conf or /etc/pip.conf exists and use the index-url if defined
-	setCustomIndexURL()
+	flag.Parse()
+	args := flag.Args()
 
-	if *help {
+	if len(args) == 0 {
 		flag.Usage()
 		return
 	}
 
-	// Start logging (only in verbose mode)
-	verboseLog("Starting to process the directory:", *path)
+	// Handle the 'version' command
+	if args[0] == "version" {
+		fmt.Printf("ru %s\n", version)
+		return
+	}
 
-	// Walk the directory to find requirements*.txt files
-	err := filepath.Walk(*path, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	// Handle the 'help' command
+	if args[0] == "help" {
+		flag.Usage()
+		return
+	}
+
+	// Handle the 'update' command
+	if args[0] == "update" {
+		path := "."
+		if len(args) > 1 {
+			path = args[1]
 		}
-		if info.IsDir() {
+
+		verbose = *verboseFlag
+
+		// Set verbose logging flag if needed
+		if verbose {
+			verboseLog("Starting update process...")
+		}
+
+		// Check if ~/.config/pip/pip.conf or /etc/pip.conf exists and use the index-url if defined
+		setCustomIndexURL()
+
+		// Start logging (only in verbose mode)
+		verboseLog("Starting to process the directory:", path)
+
+		// Walk the directory to find requirements*.txt files
+		err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			// Match files with the pattern requirements*.txt
+			matched, err := filepath.Match("requirements*.txt", filepath.Base(filePath))
+			if err != nil {
+				return err
+			}
+			if matched {
+				verboseLog("Found:", filePath)
+				updateRequirementsFile(filePath)
+			}
 			return nil
-		}
-		// Match files with the pattern requirements*.txt
-		matched, err := filepath.Match("requirements*.txt", filepath.Base(filePath))
+		})
+
 		if err != nil {
-			return err
+			log.Fatal(err)
 		}
-		if matched {
-			verboseLog("Found:", filePath)
-			updateRequirementsFile(filePath)
-		}
-		return nil
-	})
 
-	if err != nil {
-		log.Fatal(err)
+		// Summary output
+		if filesUpdated > 0 {
+			fmt.Printf("%d file updated and %d modules updated\n", filesUpdated, modulesUpdated)
+		} else {
+			fmt.Printf("%d files left unchanged\n", filesUnchanged)
+		}
+
+		verboseLog("Completed processing.")
+		return
 	}
 
-	// Summary output
-	if filesUpdated > 0 {
-		fmt.Printf("%d file updated and %d modules updated\n", filesUpdated, modulesUpdated)
-	} else {
-		fmt.Printf("%d files left unchanged\n", filesUnchanged)
-	}
-
-	verboseLog("Completed processing.")
+	// If the command is not recognized, show the help message
+	flag.Usage()
 }
 
 func setCustomIndexURL() {
@@ -414,6 +445,7 @@ func parseHTMLForLatestVersion(resp *http.Response) string {
 	}
 }
 
+// Helper function to compare version constraints
 func checkVersionConstraints(latestVersion, versionConstraints string) bool {
 	if strings.HasPrefix(versionConstraints, "==") {
 		// Handle exact version match with "=="
