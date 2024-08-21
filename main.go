@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blang/semver"
 
@@ -22,7 +23,7 @@ import (
 )
 
 // Define the version of the tool
-const version = "0.1.7"
+const version = "0.1.9"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -310,7 +311,20 @@ func getLatestVersionFromPyPI(packageName string) string {
 	// Log the URL if verbose mode is enabled
 	verboseLog("Calling URL:", url)
 
-	resp, err := http.Get(url)
+	// Create an HTTP client with a custom redirect policy
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			verboseLog("Redirected to:", req.URL.String())
+			if len(via) >= 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	// Make the request
+	resp, err := client.Get(url)
 	if err != nil {
 		log.Println("Error fetching version from PyPI:", err)
 		return ""
