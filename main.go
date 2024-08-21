@@ -23,7 +23,7 @@ import (
 )
 
 // Define the version of the tool
-const version = "0.1.9"
+const version = "0.1.10"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
