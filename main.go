@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,7 +24,7 @@ import (
 )
 
 // Define the version of the tool
-const version = "0.1.10"
+const version = "0.1.11"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -295,28 +296,44 @@ func getCachedLatestVersion(packageName string) string {
 }
 
 func getLatestVersionFromPyPI(packageName string) string {
-	var url string
+	var urlString string
 	if isCustomIndexURL {
 		// Handle custom index URL
 		if isCodeArtifact {
-			url = fmt.Sprintf("%s/%s/", pypiURL, packageName)
+			urlString = fmt.Sprintf("%s/%s/", pypiURL, packageName)
 		} else {
-			url = fmt.Sprintf("%s/%s/json", pypiURL, packageName)
+			urlString = fmt.Sprintf("%s/%s/json", pypiURL, packageName)
 		}
 	} else {
 		// Default PyPI URL
-		url = fmt.Sprintf("%s/%s/json", pypiURL, packageName)
+		urlString = fmt.Sprintf("%s/%s/json", pypiURL, packageName)
 	}
 
 	// Log the URL if verbose mode is enabled
-	verboseLog("Calling URL:", url)
+	verboseLog("Calling URL:", urlString)
+
+	// Parse the original URL to check for user info (username and password)
+	originalURL, err := url.Parse(urlString)
+	if err != nil {
+		log.Println("Error parsing URL:", err)
+		return ""
+	}
+	originalUserInfo := originalURL.User
 
 	// Create an HTTP client with a custom redirect policy
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Log each redirect if verbose mode is enabled
 			verboseLog("Redirected to:", req.URL.String())
-			if len(via) >= 5 {
+
+			// Preserve the credentials from the original request if provided
+			if originalUserInfo != nil {
+				req.URL.User = originalUserInfo
+			}
+
+			// Allow up to 10 redirects
+			if len(via) >= 10 {
 				return http.ErrUseLastResponse
 			}
 			return nil
@@ -324,7 +341,7 @@ func getLatestVersionFromPyPI(packageName string) string {
 	}
 
 	// Make the request
-	resp, err := client.Get(url)
+	resp, err := client.Get(urlString)
 	if err != nil {
 		log.Println("Error fetching version from PyPI:", err)
 		return ""
