@@ -17,13 +17,12 @@ import (
 	"time"
 
 	semv "github.com/Masterminds/semver/v3"
-	"github.com/blang/semver"
 	"golang.org/x/net/html"
 	"gopkg.in/ini.v1"
 )
 
 // Define the version of the tool
-const version = "0.1.13"
+const version = "0.1.14"
 
 // Cache to store the latest version of packages
 var versionCache = make(map[string]string)
@@ -441,34 +440,46 @@ func parseHTMLForLatestVersion(resp *http.Response) string {
 	}
 }
 
+func normalizeVersionConstraint(constraint string) string {
+	// Handle ~= operator
+	if strings.HasPrefix(constraint, "~=") {
+		version := strings.TrimPrefix(constraint, "~=")
+		if v, err := semv.NewVersion(version); err == nil {
+			return fmt.Sprintf(">=%s,<%d.%d.0", version, v.Major(), v.Minor()+1)
+		}
+	}
+
+	// Add .0 for X.Y format
+	re := regexp.MustCompile(`^([<>=~^]+)(\d+\.\d+)$`)
+	constraint = re.ReplaceAllString(constraint, "${1}${2}.0")
+
+	// Add .0.0 for X format
+	re = regexp.MustCompile(`^([<>=~^]+)(\d+)$`)
+	constraint = re.ReplaceAllString(constraint, "${1}${2}.0.0")
+
+	return constraint
+}
+
+func parseVersionConstraint(constraint string) (*semv.Constraints, error) {
+	normalized := normalizeVersionConstraint(constraint)
+	return semv.NewConstraint(normalized)
+}
+
 // Helper function to compare version constraints
 func checkVersionConstraints(latestVersion, versionConstraints string) bool {
-	if strings.HasPrefix(versionConstraints, "==") {
-		// Handle exact version match with "=="
-		return latestVersion == strings.TrimPrefix(versionConstraints, "==")
+	constraints, err := parseVersionConstraint(versionConstraints)
+	if err != nil {
+		log.Printf("Error parsing version constraints: %v for original constraint %s", err, versionConstraints)
+		return false
 	}
 
-	// Split constraints by comma
-	constraintsList := strings.Split(versionConstraints, ",")
-	for _, constraint := range constraintsList {
-		parsedConstraint, err := semver.ParseRange(strings.TrimSpace(constraint))
-		if err != nil {
-			log.Println("Error parsing version constraints:", err)
-			return false
-		}
-
-		latestSemVer, err := semver.ParseTolerant(latestVersion)
-		if err != nil {
-			log.Println("Error parsing latest version:", err)
-			return false
-		}
-
-		if !parsedConstraint(latestSemVer) {
-			return false
-		}
+	latestSemVer, err := semv.NewVersion(latestVersion)
+	if err != nil {
+		log.Println("Error parsing latest version:", err)
+		return false
 	}
 
-	return true
+	return constraints.Check(latestSemVer)
 }
 
 // verboseLog prints log messages only if verbose mode is enabled
