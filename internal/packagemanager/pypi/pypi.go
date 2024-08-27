@@ -104,7 +104,22 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 
 func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
-	url := fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
+
+	// Parse the URL to extract username and password if present
+	parsedURL, err := utils.ParseURL(p.pypiURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse PyPI URL: %w", err)
+	}
+
+	// Format the URL to include username and password if present
+	var url string
+	if parsedURL.User != nil {
+		username := parsedURL.User.Username()
+		password, _ := parsedURL.User.Password()
+		url = fmt.Sprintf("%s://%s:%s@%s/%s/", parsedURL.Scheme, username, password, parsedURL.Host, packageName)
+	} else {
+		url = fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
+	}
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -116,21 +131,6 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request for package %s: %w", packageName, err)
-	}
-
-	// Parse the URL to extract username and password if present
-	parsedURL, err := utils.ParseURL(p.pypiURL)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse PyPI URL: %w", err)
-	}
-
-	utils.VerboseLog("Parsed URL:", parsedURL)
-
-	// Set basic auth if username and password are provided
-	if parsedURL.User != nil {
-		username := parsedURL.User.Username()
-		password, _ := parsedURL.User.Password()
-		req.SetBasicAuth(username, password)
 	}
 
 	utils.VerboseLog("Initial request URL:", req.URL)
