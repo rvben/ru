@@ -123,6 +123,8 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 		return "", fmt.Errorf("failed to parse PyPI URL: %w", err)
 	}
 
+	utils.VerboseLog("Parsed URL:", parsedURL)
+
 	// Set basic auth if username and password are provided
 	if parsedURL.User != nil {
 		username := parsedURL.User.Username()
@@ -130,6 +132,7 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 		req.SetBasicAuth(username, password)
 	}
 
+	utils.VerboseLog("Request URL:", req.URL)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
