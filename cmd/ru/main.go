@@ -17,9 +17,15 @@ func main() {
 	// CLI Flags
 	flag.Usage = func() {
 		fmt.Println("Usage:")
-		fmt.Println("  ru update [path]   Update requirements*.txt files in the specified path (default: current directory)")
+		fmt.Println("  ru update [path]   Update requirements*.txt and package.json files in the specified path (default: current directory)")
 		fmt.Println("  ru version         Show the version of the tool")
 		fmt.Println("  ru help            Show this help message")
+		fmt.Println("\nFlags:")
+		fmt.Println("  -verbose           Enable verbose logging")
+		fmt.Println("  -no-cache          Disable caching")
+		fmt.Println("\nExamples:")
+		fmt.Println("  ru update          Update requirements*.txt and package.json files in the current directory")
+		fmt.Println("  ru update /path/to/dir  Update requirements*.txt and package.json files in the specified directory")
 	}
 	verboseFlag := flag.Bool("verbose", false, "Enable verbose logging")
 	noCacheFlag := flag.Bool("no-cache", false, "Disable caching")
