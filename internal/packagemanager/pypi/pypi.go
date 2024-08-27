@@ -4,13 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	semv "github.com/Masterminds/semver/v3"
 	"golang.org/x/net/html"
@@ -38,7 +36,9 @@ func New(noCache bool) *PyPI {
 	}
 	if !noCache {
 		p.cache = cache.NewCache()
-		p.cache.Load()
+		if err := p.cache.Load(); err != nil {
+			utils.VerboseLog("Error loading cache:", err)
+		}
 	}
 	return p
 }
@@ -86,49 +86,20 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 
 	if version != "" && !p.noCache {
 		p.cache.Set(packageName, version)
-		p.cache.Save()
+		if err := p.cache.Save(); err != nil {
+			utils.VerboseLog("Error saving cache:", err)
+		}
 	}
 
 	return version, nil
 }
 
 func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
-	var urlString string
-	if p.isCustomIndexURL {
-		if p.isCodeArtifact {
-			urlString = fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
-		} else {
-			urlString = fmt.Sprintf("%s/%s/json", p.pypiURL, packageName)
-		}
-	} else {
-		urlString = fmt.Sprintf("%s/%s/json", p.pypiURL, packageName)
-	}
-
-	utils.VerboseLog("Calling URL:", urlString)
-
-	originalURL, err := url.Parse(urlString)
+	packageName = strings.TrimSpace(packageName)
+	url := fmt.Sprintf("%s/%s/json", p.pypiURL, packageName)
+	resp, err := http.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("error parsing URL: %w", err)
-	}
-	originalUserInfo := originalURL.User
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			utils.VerboseLog("Redirected to:", req.URL.String())
-			if originalUserInfo != nil {
-				req.URL.User = originalUserInfo
-			}
-			if len(via) >= 10 {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
-	}
-
-	resp, err := client.Get(urlString)
-	if err != nil {
-		return "", fmt.Errorf("error fetching version from PyPI: %w", err)
+		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
 	}
 	defer resp.Body.Close()
 
@@ -136,21 +107,16 @@ func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 		return "", fmt.Errorf("PyPI returned non-OK status: %s", resp.Status)
 	}
 
-	if p.isCodeArtifact {
-		return p.parseHTMLForLatestVersion(resp)
-	}
-
-	var versionInfo struct {
+	var data struct {
 		Info struct {
 			Version string `json:"version"`
 		} `json:"info"`
 	}
-	err = json.NewDecoder(resp.Body).Decode(&versionInfo)
-	if err != nil {
-		return "", fmt.Errorf("error decoding JSON response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", fmt.Errorf("error decoding JSON for package %s: %w", packageName, err)
 	}
 
-	return versionInfo.Info.Version, nil
+	return data.Info.Version, nil
 }
 
 func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {

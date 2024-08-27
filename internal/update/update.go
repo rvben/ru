@@ -123,7 +123,8 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 			continue
 		}
 
-		re := regexp.MustCompile(`^([a-zA-Z0-9-_]+)([<>=!~]+.*)?`)
+		// Allow dots in the package name
+		re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)([<>=!~]+.*)?`)
 		matches := re.FindStringSubmatch(line)
 		if len(matches) < 2 {
 			return fmt.Errorf("%s:%d: invalid line format: %s", filePath, lineNumber, line)
