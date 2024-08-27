@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/rvben/ru/internal/packagemanager/pypi"
 	"github.com/rvben/ru/internal/update"
@@ -11,44 +12,60 @@ import (
 )
 
 // version is the current version of the tool
-const version = "0.1.21"
+const version = "0.1.23"
 
 func main() {
 	// CLI Flags
-	flag.Usage = func() {
-		fmt.Println("Usage:")
-		fmt.Println("  ru update [path]   Update requirements*.txt and package.json files in the specified path (default: current directory)")
-		fmt.Println("  ru version         Show the version of the tool")
-		fmt.Println("  ru help            Show this help message")
-		fmt.Println("\nFlags:")
-		fmt.Println("  -verbose           Enable verbose logging")
-		fmt.Println("  -no-cache          Disable caching")
-		fmt.Println("\nExamples:")
-		fmt.Println("  ru update          Update requirements*.txt and package.json files in the current directory")
-		fmt.Println("  ru update /path/to/dir  Update requirements*.txt and package.json files in the specified directory")
-	}
 	verboseFlag := flag.Bool("verbose", false, "Enable verbose logging")
 	noCacheFlag := flag.Bool("no-cache", false, "Disable caching")
 
-	flag.Parse()
-	args := flag.Args()
+	// Custom flag parsing
+	args := os.Args[1:]
+	command := ""
+	for i, arg := range args {
+		if arg == "update" || arg == "version" || arg == "help" {
+			command = arg
+			args = append(args[:i], args[i+1:]...)
+			break
+		}
+	}
 
-	if len(args) == 0 {
+	flag.CommandLine.Parse(args)
+
+	// Custom usage function
+	flag.Usage = func() {
+		fmt.Println("Usage:")
+		fmt.Println("  ru [command] [flags] [arguments]")
+		fmt.Println("\nCommands:")
+		fmt.Println("  update [path]   Update requirements*.txt and package.json files in the specified path (default: current directory)")
+		fmt.Println("  version         Show the version of the tool")
+		fmt.Println("  help            Show this help message")
+		fmt.Println("\nFlags:")
+		fmt.Println("  -verbose        Enable verbose logging")
+		fmt.Println("  -no-cache       Disable caching")
+		fmt.Println("\nExamples:")
+		fmt.Println("  ru update          Update requirements*.txt and package.json files in the current directory")
+		fmt.Println("  ru update /path/to/dir  Update requirements*.txt and package.json files in the specified directory")
+		fmt.Println("  ru -verbose update /path/to/dir  Update with verbose logging")
+		fmt.Println("  ru update -verbose /path/to/dir  Update with verbose logging")
+	}
+
+	if command == "" {
 		flag.Usage()
 		return
 	}
 
 	utils.SetVerbose(*verboseFlag)
 
-	switch args[0] {
+	switch command {
 	case "version":
 		fmt.Printf("ru %s\n", version)
 	case "help":
 		flag.Usage()
 	case "update":
 		path := "."
-		if len(args) > 1 {
-			path = args[1]
+		if len(flag.Args()) > 0 {
+			path = flag.Args()[0]
 		}
 		pm := pypi.New(*noCacheFlag)
 		if err := pm.SetCustomIndexURL(); err != nil {
