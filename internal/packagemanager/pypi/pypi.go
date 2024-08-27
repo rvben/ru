@@ -105,20 +105,10 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
 	url := fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
-	utils.VerboseLog("Fetching latest version from:", url)
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("stopped after 10 redirects")
-			}
-			if p.isCodeArtifact {
-				if userInfo := req.URL.User; userInfo != nil {
-					password, _ := userInfo.Password()
-					req.SetBasicAuth(userInfo.Username(), password)
-				}
-			}
-			return nil
+			return nil // Allow redirects
 		},
 	}
 
@@ -127,11 +117,17 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 		return "", fmt.Errorf("failed to create request for package %s: %w", packageName, err)
 	}
 
-	if p.isCodeArtifact {
-		if userInfo := req.URL.User; userInfo != nil {
-			password, _ := userInfo.Password()
-			req.URL.User = url.UserPassword(userInfo.Username(), password)
-		}
+	// Parse the URL to extract username and password if present
+	parsedURL, err := utils.ParseURL(p.pypiURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse PyPI URL: %w", err)
+	}
+
+	// Set basic auth if username and password are provided
+	if parsedURL.User != nil {
+		username := parsedURL.User.Username()
+		password, _ := parsedURL.User.Password()
+		req.SetBasicAuth(username, password)
 	}
 
 	resp, err := client.Do(req)

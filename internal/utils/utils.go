@@ -2,6 +2,7 @@ package utils
 
 import (
 	"log"
+	"net/url"
 	"strconv"
 )
 
@@ -25,4 +26,8 @@ func MustAtoi(s string) int {
 		panic(err)
 	}
 	return i
+}
+
+func ParseURL(rawURL string) (*url.URL, error) {
+	return url.Parse(rawURL)
 }
