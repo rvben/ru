@@ -174,6 +174,8 @@ func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 	var versions []*semv.Version
 
+	utils.VerboseLog("Response Body:", resp.Body)
+
 	z := html.NewTokenizer(resp.Body)
 	for {
 		tt := z.Next()
