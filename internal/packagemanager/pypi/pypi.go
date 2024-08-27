@@ -79,7 +79,15 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 		}
 	}
 
-	version, err := p.getLatestVersionFromPyPI(packageName)
+	var version string
+	var err error
+
+	if p.isCodeArtifact {
+		version, err = p.getLatestVersionFromHTML(packageName)
+	} else {
+		version, err = p.getLatestVersionFromPyPI(packageName)
+	}
+
 	if err != nil {
 		return "", err
 	}
@@ -92,6 +100,23 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 	}
 
 	return version, nil
+}
+
+func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
+	packageName = strings.TrimSpace(packageName)
+	url := fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
+	utils.VerboseLog("Fetching latest version from:", url)
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("PyPI returned non-OK status: %s", resp.Status)
+	}
+
+	return p.parseHTMLForLatestVersion(resp)
 }
 
 func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
