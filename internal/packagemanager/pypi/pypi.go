@@ -108,6 +108,7 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			utils.VerboseLog("Redirected to:", req.URL.String())
 			return nil // Allow redirects
 		},
 	}
@@ -132,12 +133,14 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 		req.SetBasicAuth(username, password)
 	}
 
-	utils.VerboseLog("Request URL:", req.URL)
+	utils.VerboseLog("Initial request URL:", req.URL)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
 	}
 	defer resp.Body.Close()
+
+	utils.VerboseLog("Final URL after redirects:", resp.Request.URL.String())
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("PyPI returned non-OK status: %s", resp.Status)
