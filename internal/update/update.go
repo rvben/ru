@@ -230,19 +230,23 @@ func (u *Updater) checkCompatibleRelease(v *semv.Version, constraint string) (bo
 func (u *Updater) updatePackageJsonFile(filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("error opening file: %w", err)
+		return fmt.Errorf("%s:1: error opening file: %w", filePath, err)
 	}
 	defer file.Close()
 
 	var data map[string]interface{}
 	if err := json.NewDecoder(file).Decode(&data); err != nil {
-		return fmt.Errorf("error decoding JSON: %w", err)
+		return fmt.Errorf("%s:1: error decoding JSON: %w", filePath, err)
 	}
+
+	utils.VerboseLog("Parsed JSON data:", data)
 
 	dependencies, ok := data["dependencies"].(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("no dependencies found in package.json")
+		return fmt.Errorf("%s:1: no dependencies found in package.json", filePath)
 	}
+
+	utils.VerboseLog("Found dependencies:", dependencies)
 
 	modulesUpdatedInFile := 0
 	npmManager := npm.New() // Use the Npm package manager
@@ -250,7 +254,7 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 	for packageName, version := range dependencies {
 		latestVersion, err := npmManager.GetLatestVersion(packageName)
 		if err != nil {
-			return fmt.Errorf("failed to get latest version for package %s: %w", packageName, err)
+			return fmt.Errorf("%s:1: failed to get latest version for package %s: %w", filePath, packageName, err)
 		}
 
 		if version != latestVersion {
@@ -268,11 +272,11 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 
 	output, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		return fmt.Errorf("error encoding JSON: %w", err)
+		return fmt.Errorf("%s:1: error encoding JSON: %w", filePath, err)
 	}
 
 	if err := os.WriteFile(filePath, output, 0644); err != nil {
-		return fmt.Errorf("error writing updated file: %w", err)
+		return fmt.Errorf("%s:1: error writing updated file: %w", filePath, err)
 	}
 
 	return nil
