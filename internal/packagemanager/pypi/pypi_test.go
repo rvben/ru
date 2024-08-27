@@ -36,7 +36,7 @@ func TestGetLatestVersion(t *testing.T) {
 	defer ts.Close()
 
 	// Create a PyPI instance with the test server URL
-	pypi := New()
+	pypi := New(true)
 	pypi.pypiURL = ts.URL
 
 	// Call the function to test
@@ -77,7 +77,7 @@ func TestParseHTMLForLatestVersion(t *testing.T) {
 	}
 
 	// Create a PyPI instance
-	pypi := New()
+	pypi := New(true)
 
 	// Call the function to test
 	latestVersion, err := pypi.parseHTMLForLatestVersion(response)

@@ -2,6 +2,7 @@ package update
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,8 +13,8 @@ import (
 	semv "github.com/Masterminds/semver/v3"
 
 	"github.com/rvben/ru/internal/packagemanager"
+	"github.com/rvben/ru/internal/packagemanager/npm"
 	"github.com/rvben/ru/internal/utils"
-	// Added import for semver functions
 )
 
 type Updater struct {
@@ -47,6 +48,15 @@ func (u *Updater) ProcessDirectory(path string) error {
 				return err
 			}
 		}
+
+		// Add this block to handle package.json files
+		if filepath.Base(filePath) == "package.json" {
+			utils.VerboseLog("Found:", filePath)
+			if err := u.updatePackageJsonFile(filePath); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 
@@ -213,4 +223,55 @@ func (u *Updater) checkCompatibleRelease(v *semv.Version, constraint string) (bo
 	}
 
 	return v.Compare(lowerBound) >= 0 && v.Compare(upperBound) < 0, nil
+}
+
+func (u *Updater) updatePackageJsonFile(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("error opening file: %w", err)
+	}
+	defer file.Close()
+
+	var data map[string]interface{}
+	if err := json.NewDecoder(file).Decode(&data); err != nil {
+		return fmt.Errorf("error decoding JSON: %w", err)
+	}
+
+	dependencies, ok := data["dependencies"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("no dependencies found in package.json")
+	}
+
+	modulesUpdatedInFile := 0
+	npmManager := npm.New() // Use the Npm package manager
+
+	for packageName, version := range dependencies {
+		latestVersion, err := npmManager.GetLatestVersion(packageName)
+		if err != nil {
+			return fmt.Errorf("failed to get latest version for package %s: %w", packageName, err)
+		}
+
+		if version != latestVersion {
+			dependencies[packageName] = latestVersion
+			modulesUpdatedInFile++
+		}
+	}
+
+	if modulesUpdatedInFile > 0 {
+		u.filesUpdated++
+		u.modulesUpdated += modulesUpdatedInFile
+	} else {
+		u.filesUnchanged++
+	}
+
+	output, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("error encoding JSON: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, output, 0644); err != nil {
+		return fmt.Errorf("error writing updated file: %w", err)
+	}
+
+	return nil
 }
