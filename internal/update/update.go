@@ -50,17 +50,16 @@ func (u *Updater) ProcessDirectory(path string) error {
 			return nil
 		}
 
-		// Check if the file should be ignored
-		if ignorer != nil && ignorer.MatchesPath(filePath) {
-			utils.VerboseLog("Ignoring:", filePath)
-			return nil
-		}
-
 		matched, err := filepath.Match("requirements*.txt", filepath.Base(filePath))
 		if err != nil {
 			return err
 		}
 		if matched {
+			// Check if the file should be ignored
+			if ignorer != nil && ignorer.MatchesPath(filePath) {
+				utils.VerboseLog("Ignoring:", filePath)
+				return nil
+			}
 			utils.VerboseLog("Found:", filePath)
 			if err := u.updateRequirementsFile(filePath); err != nil {
 				return err
@@ -69,6 +68,11 @@ func (u *Updater) ProcessDirectory(path string) error {
 
 		// Add this block to handle package.json files
 		if filepath.Base(filePath) == "package.json" {
+			// Check if the file should be ignored
+			if ignorer != nil && ignorer.MatchesPath(filePath) {
+				utils.VerboseLog("Ignoring:", filePath)
+				return nil
+			}
 			utils.VerboseLog("Found:", filePath)
 			if err := u.updatePackageJsonFile(filePath); err != nil {
 				return err
