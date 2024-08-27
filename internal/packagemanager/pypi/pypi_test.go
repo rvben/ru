@@ -1,4 +1,4 @@
-package main
+package pypi
 
 import (
 	"encoding/json"
@@ -9,15 +9,14 @@ import (
 	"testing"
 )
 
-// Mock structure for the JSON response from PyPI
+// MockPyPIResponse structure for the JSON response from PyPI
 type MockPyPIResponse struct {
 	Info struct {
 		Version string `json:"version"`
 	} `json:"info"`
 }
 
-// Test for getLatestVersionFromPyPI
-func TestGetLatestVersionFromPyPI(t *testing.T) {
+func TestGetLatestVersion(t *testing.T) {
 	// Expected latest version in the mock JSON response
 	expectedVersion := "3.1.0"
 
@@ -36,23 +35,22 @@ func TestGetLatestVersionFromPyPI(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Override the pypiURL to point to the test server
-	originalPyPIURL := pypiURL
-	pypiURL = ts.URL + "/pypi"
-	defer func() { pypiURL = originalPyPIURL }()
+	// Create a PyPI instance with the test server URL
+	pypi := New()
+	pypi.pypiURL = ts.URL
 
 	// Call the function to test
-	latestVersion := getLatestVersionFromPyPI("example-package")
+	latestVersion, err := pypi.GetLatestVersion("example-package")
+	if err != nil {
+		t.Fatalf("GetLatestVersion failed: %v", err)
+	}
 
 	// Check if the returned latest version is correct
 	if latestVersion != expectedVersion {
 		t.Errorf("Expected latest version %s, but got %s", expectedVersion, latestVersion)
-	} else {
-		t.Logf("Test passed: Latest version is %s", latestVersion)
 	}
 }
 
-// Test for parseHTMLForLatestVersion (as defined previously)
 func TestParseHTMLForLatestVersion(t *testing.T) {
 	// Sample HTML input
 	htmlContent := `<!DOCTYPE html>
@@ -78,8 +76,14 @@ func TestParseHTMLForLatestVersion(t *testing.T) {
 		Body: io.NopCloser(strings.NewReader(htmlContent)),
 	}
 
+	// Create a PyPI instance
+	pypi := New()
+
 	// Call the function to test
-	latestVersion := parseHTMLForLatestVersion(response)
+	latestVersion, err := pypi.parseHTMLForLatestVersion(response)
+	if err != nil {
+		t.Fatalf("parseHTMLForLatestVersion failed: %v", err)
+	}
 
 	// Define the expected latest version
 	expectedVersion := "4.66.5"
@@ -87,7 +91,5 @@ func TestParseHTMLForLatestVersion(t *testing.T) {
 	// Check if the returned latest version is correct
 	if latestVersion != expectedVersion {
 		t.Errorf("Expected latest version %s, but got %s", expectedVersion, latestVersion)
-	} else {
-		t.Logf("Test passed: Latest version is %s", latestVersion)
 	}
 }
