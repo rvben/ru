@@ -11,7 +11,7 @@ import (
 )
 
 // version is the current version of the tool
-const version = "0.1.15"
+const version = "0.1.16"
 
 func main() {
 	// CLI Flags
@@ -22,6 +22,7 @@ func main() {
 		fmt.Println("  ru help            Show this help message")
 	}
 	verboseFlag := flag.Bool("verbose", false, "Enable verbose logging")
+	noCacheFlag := flag.Bool("no-cache", false, "Disable caching")
 
 	flag.Parse()
 	args := flag.Args()
@@ -43,7 +44,7 @@ func main() {
 		if len(args) > 1 {
 			path = args[1]
 		}
-		pm := pypi.New()
+		pm := pypi.New(*noCacheFlag)
 		if err := pm.SetCustomIndexURL(); err != nil {
 			log.Fatalf("Error setting custom index URL: %v", err)
 		}

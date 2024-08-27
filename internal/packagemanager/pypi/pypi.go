@@ -16,6 +16,7 @@ import (
 	"golang.org/x/net/html"
 	"gopkg.in/ini.v1"
 
+	"github.com/rvben/ru/internal/cache"
 	"github.com/rvben/ru/internal/utils"
 )
 
@@ -25,13 +26,21 @@ type PyPI struct {
 	isCodeArtifact   bool
 	versionCache     map[string]string
 	cacheMutex       sync.Mutex
+	cache            *cache.Cache
+	noCache          bool
 }
 
-func New() *PyPI {
-	return &PyPI{
+func New(noCache bool) *PyPI {
+	p := &PyPI{
 		pypiURL:      "https://pypi.org/pypi",
 		versionCache: make(map[string]string),
+		noCache:      noCache,
 	}
+	if !noCache {
+		p.cache = cache.NewCache()
+		p.cache.Load()
+	}
+	return p
 }
 
 func (p *PyPI) SetCustomIndexURL() error {
@@ -63,13 +72,11 @@ func (p *PyPI) SetCustomIndexURL() error {
 }
 
 func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
-	p.cacheMutex.Lock()
-	version, found := p.versionCache[packageName]
-	p.cacheMutex.Unlock()
-
-	if found {
-		utils.VerboseLog("Cache hit for package:", packageName, "version:", version)
-		return version, nil
+	if !p.noCache {
+		if version, found := p.cache.Get(packageName); found {
+			utils.VerboseLog("Cache hit for package:", packageName, "version:", version)
+			return version, nil
+		}
 	}
 
 	version, err := p.getLatestVersionFromPyPI(packageName)
@@ -77,10 +84,9 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 		return "", err
 	}
 
-	if version != "" {
-		p.cacheMutex.Lock()
-		p.versionCache[packageName] = version
-		p.cacheMutex.Unlock()
+	if version != "" && !p.noCache {
+		p.cache.Set(packageName, version)
+		p.cache.Save()
 	}
 
 	return version, nil
