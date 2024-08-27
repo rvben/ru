@@ -15,6 +15,7 @@ import (
 	"github.com/rvben/ru/internal/packagemanager"
 	"github.com/rvben/ru/internal/packagemanager/npm"
 	"github.com/rvben/ru/internal/utils"
+	ignore "github.com/sabhiram/go-gitignore"
 )
 
 type Updater struct {
@@ -31,6 +32,16 @@ func NewUpdater(pm packagemanager.PackageManager) *Updater {
 func (u *Updater) ProcessDirectory(path string) error {
 	utils.VerboseLog("Starting to process the directory:", path)
 
+	// Load .gitignore file
+	ignoreFile := filepath.Join(path, ".gitignore")
+	var ignorer *ignore.GitIgnore
+	if _, err := os.Stat(ignoreFile); err == nil {
+		ignorer, err = ignore.CompileIgnoreFile(ignoreFile)
+		if err != nil {
+			return fmt.Errorf("error compiling .gitignore file: %w", err)
+		}
+	}
+
 	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -38,6 +49,13 @@ func (u *Updater) ProcessDirectory(path string) error {
 		if info.IsDir() {
 			return nil
 		}
+
+		// Check if the file should be ignored
+		if ignorer != nil && ignorer.MatchesPath(filePath) {
+			utils.VerboseLog("Ignoring:", filePath)
+			return nil
+		}
+
 		matched, err := filepath.Match("requirements*.txt", filepath.Base(filePath))
 		if err != nil {
 			return err
@@ -65,9 +83,17 @@ func (u *Updater) ProcessDirectory(path string) error {
 	}
 
 	if u.filesUpdated > 0 {
-		fmt.Printf("%d file updated and %d modules updated\n", u.filesUpdated, u.modulesUpdated)
+		if u.filesUpdated == 1 {
+			fmt.Printf("%d file updated and %d modules updated\n", u.filesUpdated, u.modulesUpdated)
+		} else {
+			fmt.Printf("%d files updated and %d modules updated\n", u.filesUpdated, u.modulesUpdated)
+		}
 	} else {
-		fmt.Printf("%d files left unchanged\n", u.filesUnchanged)
+		if u.filesUnchanged == 1 {
+			fmt.Printf("%d file left unchanged\n", u.filesUnchanged)
+		} else {
+			fmt.Printf("%d files left unchanged\n", u.filesUnchanged)
+		}
 	}
 
 	utils.VerboseLog("Completed processing.")
