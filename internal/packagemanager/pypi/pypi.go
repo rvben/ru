@@ -112,6 +112,12 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
 			}
+			if p.isCodeArtifact {
+				if userInfo := req.URL.User; userInfo != nil {
+					password, _ := userInfo.Password()
+					req.SetBasicAuth(userInfo.Username(), password)
+				}
+			}
 			return nil
 		},
 	}
@@ -124,7 +130,7 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 	if p.isCodeArtifact {
 		if userInfo := req.URL.User; userInfo != nil {
 			password, _ := userInfo.Password()
-			req.SetBasicAuth(userInfo.Username(), password)
+			req.URL.User = url.UserPassword(userInfo.Username(), password)
 		}
 	}
 
