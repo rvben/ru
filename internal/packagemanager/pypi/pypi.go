@@ -106,7 +106,29 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
 	url := fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
 	utils.VerboseLog("Fetching latest version from:", url)
-	resp, err := http.Get(url)
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request for package %s: %w", packageName, err)
+	}
+
+	if p.isCodeArtifact {
+		if userInfo := req.URL.User; userInfo != nil {
+			password, _ := userInfo.Password()
+			req.SetBasicAuth(userInfo.Username(), password)
+		}
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
 	}
