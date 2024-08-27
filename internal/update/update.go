@@ -77,7 +77,7 @@ func (u *Updater) ProcessDirectory(path string) error {
 func (u *Updater) updateRequirementsFile(filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("error opening file: %w", err)
+		return fmt.Errorf("%s:1: error opening file: %w", filePath, err)
 	}
 	defer file.Close()
 
@@ -86,7 +86,9 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 	modulesUpdatedInFile := 0
 
 	scanner := bufio.NewScanner(file)
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			if strings.HasPrefix(line, "#") {
@@ -98,7 +100,7 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		re := regexp.MustCompile(`^([a-zA-Z0-9-_]+)([<>=!~]+.*)?`)
 		matches := re.FindStringSubmatch(line)
 		if len(matches) < 2 {
-			return fmt.Errorf("invalid line format: %s", line)
+			return fmt.Errorf("%s:%d: invalid line format: %s", filePath, lineNumber, line)
 		}
 
 		packageName := matches[1]
@@ -107,12 +109,12 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 
 		latestVersion, err := u.pm.GetLatestVersion(packageName)
 		if err != nil {
-			return fmt.Errorf("failed to get latest version for package %s: %w", packageName, err)
+			return fmt.Errorf("%s:%d: failed to get latest version for package %s: %w", filePath, lineNumber, packageName, err)
 		}
 
 		updatedLine, err := u.updateLine(line, packageName, versionConstraints, latestVersion)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s:%d: error updating line: %w", filePath, lineNumber, err)
 		}
 
 		if updatedLine != line {
@@ -123,7 +125,7 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading file: %w", err)
+		return fmt.Errorf("%s:%d: error reading file: %w", filePath, lineNumber, err)
 	}
 
 	for line := range uniqueLines {
@@ -135,7 +137,7 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 
 	err = os.WriteFile(filePath, []byte(output), 0644)
 	if err != nil {
-		return fmt.Errorf("error writing updated file: %w", err)
+		return fmt.Errorf("%s:1: error writing updated file: %w", filePath, err)
 	}
 
 	if modulesUpdatedInFile > 0 {
