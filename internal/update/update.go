@@ -265,6 +265,16 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 	}
 	defer file.Close()
 
+	// If file is empty, skip with warning
+	stat, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("%s:1: error getting file info: %w", filePath, err)
+	}
+	if stat.Size() == 0 {
+		utils.VerboseLog("Warning: File is empty:", filePath)
+		return nil
+	}
+
 	var data map[string]interface{}
 	if err := json.NewDecoder(file).Decode(&data); err != nil {
 		return fmt.Errorf("%s:1: error decoding JSON: %w", filePath, err)
