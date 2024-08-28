@@ -127,6 +127,12 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 			continue
 		}
 
+		// Skip lines that start with 'git+'
+		if strings.HasPrefix(line, "git+") {
+			utils.VerboseLog("Skipping git+ line:", line)
+			continue
+		}
+
 		// Allow dots in the package name
 		re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)([<>=!~]+.*)?`)
 		matches := re.FindStringSubmatch(line)
