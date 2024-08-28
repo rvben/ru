@@ -106,6 +106,7 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
 	packageName = strings.ReplaceAll(packageName, ".", "-")
+	packageName = strings.ReplaceAll(packageName, "_", "-")
 	packageName = strings.ToLower(packageName)
 
 	url := fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
