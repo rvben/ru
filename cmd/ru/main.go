@@ -12,7 +12,7 @@ import (
 )
 
 // version is the current version of the tool
-const version = "0.1.42"
+const version = "0.1.43"
 
 func main() {
 	// CLI Flags

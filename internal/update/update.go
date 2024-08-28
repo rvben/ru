@@ -290,7 +290,8 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 
 	dependencies, ok := data["dependencies"].(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("%s:1: no dependencies found in package.json", filePath)
+		utils.VerboseLog("Warning: No dependencies found in package.json:", filePath)
+		return nil
 	}
 
 	utils.VerboseLog("Found dependencies:", dependencies)
