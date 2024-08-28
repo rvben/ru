@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	semv "github.com/Masterminds/semver/v3"
 	"golang.org/x/sync/errgroup"
@@ -327,16 +328,31 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 	modulesUpdatedInFile := 0
 	npmManager := npm.New() // Use the Npm package manager
 
-	for packageName, version := range dependencies {
-		latestVersion, err := npmManager.GetLatestVersion(packageName)
-		if err != nil {
-			return fmt.Errorf("%s:1: failed to get latest version for package %s: %w", filePath, packageName, err)
-		}
+	var g errgroup.Group
+	var mu sync.Mutex
 
-		if version != latestVersion {
-			dependencies[packageName] = latestVersion
-			modulesUpdatedInFile++
-		}
+	for packageName, version := range dependencies {
+		packageName := packageName // capture range variable
+		version := version         // capture range variable
+
+		g.Go(func() error {
+			latestVersion, err := npmManager.GetLatestVersion(packageName)
+			if err != nil {
+				return fmt.Errorf("%s:1: failed to get latest version for package %s: %w", filePath, packageName, err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if version != latestVersion {
+				dependencies[packageName] = latestVersion
+				modulesUpdatedInFile++
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
 	}
 
 	if modulesUpdatedInFile > 0 {
