@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	semv "github.com/Masterminds/semver/v3"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/rvben/ru/internal/packagemanager"
 	"github.com/rvben/ru/internal/packagemanager/npm"
@@ -104,6 +105,15 @@ func (u *Updater) ProcessDirectory(path string) error {
 	return nil
 }
 
+type result struct {
+	line               string
+	updatedLine        string
+	err                error
+	lineNumber         int
+	packageName        string
+	versionConstraints string
+}
+
 func (u *Updater) updateRequirementsFile(filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -117,6 +127,10 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 
 	scanner := bufio.NewScanner(file)
 	lineNumber := 0
+
+	var g errgroup.Group
+	results := make(chan result)
+
 	for scanner.Scan() {
 		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
@@ -144,21 +158,37 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		versionConstraints := matches[2]
 		utils.VerboseLog("Processing package:", packageName)
 
-		latestVersion, err := u.pm.GetLatestVersion(packageName)
-		if err != nil {
-			return fmt.Errorf("%s:%d: failed to get latest version for package %s: %w", filePath, lineNumber, packageName, err)
+		g.Go(func() error {
+			latestVersion, err := u.pm.GetLatestVersion(packageName)
+			if err != nil {
+				return fmt.Errorf("%s:%d: failed to get latest version for package %s: %w", filePath, lineNumber, packageName, err)
+			}
+
+			updatedLine, err := u.updateLine(line, packageName, versionConstraints, latestVersion)
+			if err != nil {
+				return fmt.Errorf("%s:%d: error updating line: %w", filePath, lineNumber, err)
+			}
+
+			results <- result{line: line, updatedLine: updatedLine, lineNumber: lineNumber, packageName: packageName, versionConstraints: versionConstraints}
+			return nil
+		})
+	}
+
+	go func() {
+		g.Wait()
+		close(results)
+	}()
+
+	for res := range results {
+		if res.err != nil {
+			return res.err
 		}
 
-		updatedLine, err := u.updateLine(line, packageName, versionConstraints, latestVersion)
-		if err != nil {
-			return fmt.Errorf("%s:%d: error updating line: %w", filePath, lineNumber, err)
-		}
-
-		if updatedLine != line {
+		if res.updatedLine != res.line {
 			modulesUpdatedInFile++
 		}
 
-		uniqueLines[updatedLine] = struct{}{}
+		uniqueLines[res.updatedLine] = struct{}{}
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -285,8 +315,6 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 	if err := json.NewDecoder(file).Decode(&data); err != nil {
 		return fmt.Errorf("%s:1: error decoding JSON: %w", filePath, err)
 	}
-
-	utils.VerboseLog("Parsed JSON data:", data)
 
 	dependencies, ok := data["dependencies"].(map[string]interface{})
 	if !ok {
