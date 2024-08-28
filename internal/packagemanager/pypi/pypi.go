@@ -6,11 +6,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
-	semv "github.com/Masterminds/semver/v3"
 	"golang.org/x/net/html"
 	"gopkg.in/ini.v1"
 
@@ -105,6 +106,7 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
 	packageName = strings.ReplaceAll(packageName, ".", "-")
+	packageName = strings.ToLower(packageName)
 
 	url := fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
 
@@ -149,9 +151,8 @@ func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 }
 
 func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
-	var versions []*semv.Version
-
-	utils.VerboseLog("Response body:", resp.Body)
+	var versions []string
+	originalVersions := make(map[string]string)
 
 	z := html.NewTokenizer(resp.Body)
 	for {
@@ -161,8 +162,11 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 			if len(versions) == 0 {
 				return "", fmt.Errorf("no versions found")
 			}
-			sort.Sort(semv.Collection(versions))
-			return versions[len(versions)-1].String(), nil
+			sort.Slice(versions, func(i, j int) bool {
+				return compareVersions(versions[i], versions[j]) < 0
+			})
+			latestVersion := versions[len(versions)-1]
+			return originalVersions[latestVersion], nil
 
 		case tt == html.StartTagToken:
 			t := z.Token()
@@ -172,13 +176,44 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 						versionPath := strings.Trim(a.Val, "/")
 						parts := strings.Split(versionPath, "/")
 						versionStr := parts[0]
-						version, err := semv.NewVersion(versionStr)
-						if err == nil {
-							versions = append(versions, version)
-						}
+
+						// Use regex to strip unwanted suffixes for comparison
+						re := regexp.MustCompile(`(\.post\d+|\.dev\d+|a\d*|b\d*|rc\d*|[-+].*)$`)
+						parsedVersionStr := re.ReplaceAllString(versionStr, "")
+
+						versions = append(versions, parsedVersionStr)
+						originalVersions[parsedVersionStr] = versionStr
 					}
 				}
 			}
 		}
 	}
+}
+
+func compareVersions(v1, v2 string) int {
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+
+	maxLen := len(parts1)
+	if len(parts2) > maxLen {
+		maxLen = len(parts2)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var p1, p2 int
+		if i < len(parts1) {
+			p1, _ = strconv.Atoi(parts1[i])
+		}
+		if i < len(parts2) {
+			p2, _ = strconv.Atoi(parts2[i])
+		}
+
+		if p1 < p2 {
+			return -1
+		} else if p1 > p2 {
+			return 1
+		}
+	}
+
+	return 0
 }
