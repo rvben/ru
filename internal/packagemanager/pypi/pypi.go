@@ -42,6 +42,13 @@ func New(noCache bool) *PyPI {
 			utils.VerboseLog("Error loading cache:", err)
 		}
 	}
+
+	// Try to load custom index URL from pip.conf
+	if err := p.SetCustomIndexURL(); err != nil {
+		utils.VerboseLog("Error setting custom index URL:", err)
+	}
+
+	utils.VerboseLog("Using PyPI URL:", p.pypiURL)
 	return p
 }
 
@@ -74,6 +81,8 @@ func (p *PyPI) SetCustomIndexURL() error {
 }
 
 func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
+	utils.VerboseLog("Getting latest version for", packageName, "from", p.pypiURL)
+
 	if !p.noCache {
 		if version, found := p.cache.Get(packageName); found {
 			utils.VerboseLog("Cache hit for package:", packageName, "version:", version)
@@ -85,8 +94,10 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 	var err error
 
 	if p.isCodeArtifact {
+		utils.VerboseLog("Using CodeArtifact HTML parsing for", packageName)
 		version, err = p.getLatestVersionFromHTML(packageName)
 	} else {
+		utils.VerboseLog("Using PyPI JSON API for", packageName)
 		version, err = p.getLatestVersionFromPyPI(packageName)
 	}
 
