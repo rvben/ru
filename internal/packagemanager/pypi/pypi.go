@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -81,38 +83,61 @@ func (p *PyPI) SetCustomIndexURL() error {
 }
 
 func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
-	utils.VerboseLog("Getting latest version for", packageName, "from", p.pypiURL)
-
+	// First check if we have a cached version
 	if !p.noCache {
-		if version, found := p.cache.Get(packageName); found {
-			utils.VerboseLog("Cache hit for package:", packageName, "version:", version)
+		if version, ok := p.cache.Get(packageName); ok {
+			utils.VerboseLog("Using cached version for", packageName+":", version)
 			return version, nil
 		}
 	}
 
-	var version string
-	var err error
-
-	if p.isCodeArtifact {
-		utils.VerboseLog("Using CodeArtifact HTML parsing for", packageName)
-		version, err = p.getLatestVersionFromHTML(packageName)
-	} else {
-		utils.VerboseLog("Using PyPI JSON API for", packageName)
-		version, err = p.getLatestVersionFromPyPI(packageName)
-	}
-
-	if err != nil {
-		return "", err
-	}
-
-	if version != "" && !p.noCache {
-		p.cache.Set(packageName, version)
-		if err := p.cache.Save(); err != nil {
-			utils.VerboseLog("Error saving cache:", err)
+	// Try to get version from custom index first
+	if p.isCustomIndexURL {
+		version, err := p.getLatestVersionFromHTML(packageName)
+		if err != nil {
+			// Provide more specific error messages for common failures
+			if urlErr, ok := err.(*url.Error); ok {
+				if urlErr.Timeout() {
+					return "", fmt.Errorf("custom index timed out (%s): %w", p.pypiURL, err)
+				}
+				if _, ok := urlErr.Err.(*net.DNSError); ok {
+					return "", fmt.Errorf("custom index not reachable (%s): %w", p.pypiURL, err)
+				}
+			}
+			if strings.Contains(err.Error(), "non-OK status") {
+				return "", fmt.Errorf("custom index returned error (%s): %w", p.pypiURL, err)
+			}
+			// Generic error message for other cases
+			return "", fmt.Errorf("custom index error (%s): %w", p.pypiURL, err)
 		}
+		if version == "" {
+			return "", fmt.Errorf("package %s not found in custom index (%s)", packageName, p.pypiURL)
+		}
+		if !p.noCache {
+			p.cache.Set(packageName, version)
+			if err := p.cache.Save(); err != nil {
+				utils.VerboseLog("Warning: Failed to save cache:", err)
+			}
+		}
+		return version, nil
 	}
 
-	return version, nil
+	// Only fall back to PyPI if no custom index is specified
+	if !p.isCustomIndexURL {
+		version, err := p.getLatestVersionFromPyPI(packageName)
+		if err != nil {
+			return "", fmt.Errorf("failed to get version from PyPI for %s: %w", packageName, err)
+		}
+		if !p.noCache {
+			p.cache.Set(packageName, version)
+			if err := p.cache.Save(); err != nil {
+				utils.VerboseLog("Warning: Failed to save cache:", err)
+			}
+		}
+		return version, nil
+	}
+
+	return "", fmt.Errorf("no version found for package %s", packageName)
 }
 
 func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
