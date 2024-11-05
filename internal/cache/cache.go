@@ -2,6 +2,7 @@ package cache
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -80,4 +81,18 @@ func (c *Cache) Set(packageName, version string) {
 		Version:   version,
 		Timestamp: time.Now(),
 	}
+}
+
+func Clean() error {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("error getting cache directory: %w", err)
+	}
+
+	cacheFile := filepath.Join(cacheDir, "ru", "versions.json")
+	if err := os.Remove(cacheFile); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error removing cache file: %w", err)
+	}
+
+	return nil
 }
