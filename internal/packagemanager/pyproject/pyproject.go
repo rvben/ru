@@ -15,6 +15,21 @@ type PyProject struct {
 		Dependencies         []string            `toml:"dependencies"`
 		OptionalDependencies map[string][]string `toml:"optional-dependencies"`
 	} `toml:"project"`
+	Tool struct {
+		Ru struct {
+			IgnoreUpdates []string `toml:"ignore-updates"`
+		} `toml:"ru"`
+	} `toml:"tool"`
+}
+
+func (p *PyProject) shouldIgnorePackage(packageName string) bool {
+	for _, ignored := range p.Tool.Ru.IgnoreUpdates {
+		if ignored == packageName {
+			utils.VerboseLog("Ignoring package:", packageName)
+			return true
+		}
+	}
+	return false
 }
 
 func (p *PyProject) UpdateVersions(versions map[string]string) (bool, error) {
@@ -26,6 +41,9 @@ func (p *PyProject) UpdateVersions(versions map[string]string) (bool, error) {
 		for i, dep := range deps {
 			switch v := dep.(type) {
 			case string:
+				if pkg := getPackageName(v); p.shouldIgnorePackage(pkg) {
+					continue
+				}
 				if newDep, changed := updateDependencyVersion(v, versions); changed {
 					deps[i] = newDep
 					updated = true
@@ -43,6 +61,9 @@ func (p *PyProject) UpdateVersions(versions map[string]string) (bool, error) {
 
 	// Update project dependencies
 	for i, dep := range p.Project.Dependencies {
+		if pkg := getPackageName(dep); p.shouldIgnorePackage(pkg) {
+			continue
+		}
 		if newDep, changed := updateDependencyVersion(dep, versions); changed {
 			p.Project.Dependencies[i] = newDep
 			updated = true
@@ -52,6 +73,9 @@ func (p *PyProject) UpdateVersions(versions map[string]string) (bool, error) {
 	// Update optional dependencies
 	for _, deps := range p.Project.OptionalDependencies {
 		for i, dep := range deps {
+			if pkg := getPackageName(dep); p.shouldIgnorePackage(pkg) {
+				continue
+			}
 			if newDep, changed := updateDependencyVersion(dep, versions); changed {
 				deps[i] = newDep
 				updated = true
@@ -84,6 +108,22 @@ func updateDependencyVersion(dep string, versions map[string]string) (string, bo
 	}
 
 	return dep, false
+}
+
+// Helper function to extract package name from dependency string
+func getPackageName(dep string) string {
+	// Skip empty lines and comments
+	if dep == "" || strings.HasPrefix(dep, "#") {
+		return ""
+	}
+
+	// Parse the dependency string
+	parts := strings.Split(dep, "==")
+	if len(parts) < 1 {
+		return ""
+	}
+
+	return strings.TrimSpace(parts[0])
 }
 
 func LoadAndUpdate(filename string, versions map[string]string) error {
