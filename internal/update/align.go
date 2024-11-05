@@ -46,7 +46,27 @@ func (a *Aligner) Run() error {
 	}
 
 	// Second pass: align versions
-	return a.alignVersions(".")
+	if err := a.alignVersions("."); err != nil {
+		return err
+	}
+
+	// Print summary
+	if a.filesUpdated > 0 {
+		if a.filesUpdated == 1 {
+			fmt.Printf("%d file aligned and %d modules updated\n", a.filesUpdated, a.modulesUpdated)
+		} else {
+			fmt.Printf("%d files aligned and %d modules updated\n", a.filesUpdated, a.modulesUpdated)
+		}
+	} else {
+		if a.filesUnchanged == 1 {
+			fmt.Printf("%d file left unchanged\n", a.filesUnchanged)
+		} else {
+			fmt.Printf("%d files left unchanged\n", a.filesUnchanged)
+		}
+	}
+
+	utils.VerboseLog("Completed aligning versions.")
+	return nil
 }
 
 func (a *Aligner) collectVersions(path string) error {

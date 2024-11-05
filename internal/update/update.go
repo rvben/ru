@@ -16,6 +16,7 @@ import (
 
 	"github.com/rvben/ru/internal/packagemanager/npm"
 	"github.com/rvben/ru/internal/packagemanager/pypi"
+	"github.com/rvben/ru/internal/packagemanager/pyproject"
 	"github.com/rvben/ru/internal/utils"
 	ignore "github.com/sabhiram/go-gitignore"
 )
@@ -59,39 +60,34 @@ func (u *Updater) ProcessDirectory(path string) error {
 		if err != nil {
 			return err
 		}
+
+		// Skip directories that are in .gitignore
 		if info.IsDir() {
+			if ignorer != nil && ignorer.MatchesPath(filePath) {
+				utils.VerboseLog("Ignoring directory:", filePath)
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
-		matched, err := filepath.Match("requirements*.txt", filepath.Base(filePath))
+		// Check if the file should be ignored
+		relPath, err := filepath.Rel(".", filePath)
 		if err != nil {
 			return err
 		}
-		if matched {
-			// Check if the file should be ignored
-			if ignorer != nil && ignorer.MatchesPath(filePath) {
-				utils.VerboseLog("Ignoring:", filePath)
-				return nil
-			}
-			utils.VerboseLog("Found:", filePath)
-			if err := u.updateRequirementsFile(filePath); err != nil {
-				return err
-			}
+		if ignorer != nil && ignorer.MatchesPath(relPath) {
+			utils.VerboseLog("Ignoring file:", relPath)
+			return nil
 		}
 
-		// Add this block to handle package.json files
-		if filepath.Base(filePath) == "package.json" {
-			// Check if the file should be ignored
-			if ignorer != nil && ignorer.MatchesPath(filePath) {
-				utils.VerboseLog("Ignoring:", filePath)
-				return nil
-			}
-			utils.VerboseLog("Found:", filePath)
-			if err := u.updatePackageJsonFile(filePath); err != nil {
-				return err
-			}
+		switch {
+		case strings.HasSuffix(filePath, "requirements.txt"):
+			return u.updateRequirementsFile(filePath)
+		case filepath.Base(filePath) == "package.json":
+			return u.updatePackageJsonFile(filePath)
+		case filepath.Base(filePath) == "pyproject.toml":
+			return u.updatePyProjectFile(filePath)
 		}
-
 		return nil
 	})
 
@@ -380,6 +376,20 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 
 	if err := os.WriteFile(filePath, output, 0644); err != nil {
 		return fmt.Errorf("%s:1: error writing updated file: %w", filePath, err)
+	}
+
+	return nil
+}
+
+func (u *Updater) updatePyProjectFile(filePath string) error {
+	utils.VerboseLog("Processing pyproject.toml file:", filePath)
+
+	// Collect all versions first
+	versions := make(map[string]string)
+
+	// Process the file
+	if err := pyproject.LoadAndUpdate(filePath, versions); err != nil {
+		return fmt.Errorf("%s: %w", filePath, err)
 	}
 
 	return nil
