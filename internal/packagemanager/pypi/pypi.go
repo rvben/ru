@@ -3,6 +3,7 @@ package pypi
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -140,60 +141,33 @@ func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 	}
 
 	var data struct {
-		Info struct {
-			Version string `json:"version"`
-		} `json:"info"`
+		Releases map[string]interface{} `json:"releases"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return "", fmt.Errorf("error decoding JSON for package %s: %w", packageName, err)
 	}
 
-	return data.Info.Version, nil
+	// Extract all version strings
+	var versions []string
+	for version := range data.Releases {
+		versions = append(versions, version)
+	}
+
+	return p.selectLatestStableVersion(versions)
 }
 
 func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 	var versions []string
-	versionMap := make(map[string]string)
 
 	z := html.NewTokenizer(resp.Body)
 	for {
 		tt := z.Next()
 		switch {
 		case tt == html.ErrorToken:
-			if len(versions) == 0 {
-				return "", fmt.Errorf("no versions found")
+			if z.Err() == io.EOF {
+				return p.selectLatestStableVersion(versions)
 			}
-
-			// First, separate stable and pre-release versions
-			var stableVersions []string
-			var preReleaseVersions []string
-
-			for _, v := range versions {
-				if isPrerelease(versionMap[v]) {
-					preReleaseVersions = append(preReleaseVersions, v)
-				} else {
-					stableVersions = append(stableVersions, v)
-				}
-			}
-
-			// If we have stable versions, use those; otherwise fall back to pre-release
-			var candidateVersions []string
-			if len(stableVersions) > 0 {
-				candidateVersions = stableVersions
-			} else {
-				candidateVersions = preReleaseVersions
-			}
-
-			// Sort the candidate versions
-			sort.Slice(candidateVersions, func(i, j int) bool {
-				return compareVersions(candidateVersions[i], candidateVersions[j]) < 0
-			})
-
-			if len(candidateVersions) == 0 {
-				return "", fmt.Errorf("no valid versions found")
-			}
-
-			return versionMap[candidateVersions[len(candidateVersions)-1]], nil
+			return "", z.Err()
 
 		case tt == html.StartTagToken:
 			t := z.Token()
@@ -202,12 +176,9 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 					if a.Key == "href" {
 						versionPath := strings.Trim(a.Val, "/")
 						parts := strings.Split(versionPath, "/")
-						originalVersion := parts[0]
-
-						// Store both the cleaned version (for comparison) and original version
-						cleanVersion := stripPrereleaseSuffix(originalVersion)
-						versions = append(versions, cleanVersion)
-						versionMap[cleanVersion] = originalVersion
+						if len(parts) > 0 {
+							versions = append(versions, parts[0])
+						}
 					}
 				}
 			}
@@ -271,4 +242,48 @@ func isPrerelease(version string) bool {
 func stripPrereleaseSuffix(version string) string {
 	re := regexp.MustCompile(`(\.post\d+|\.dev\d+|a\d*|b\d*|c\d*|rc\d*|alpha\d*|beta\d*|preview\d*|[-+].*)$`)
 	return re.ReplaceAllString(version, "")
+}
+
+func (p *PyPI) selectLatestStableVersion(versions []string) (string, error) {
+	if len(versions) == 0 {
+		return "", fmt.Errorf("no versions found")
+	}
+
+	// Map to store original versions
+	versionMap := make(map[string]string)
+	for _, v := range versions {
+		cleanVersion := stripPrereleaseSuffix(v)
+		versionMap[cleanVersion] = v
+	}
+
+	// Separate stable and pre-release versions
+	var stableVersions []string
+	var preReleaseVersions []string
+
+	for origVersion := range versionMap {
+		if isPrerelease(versionMap[origVersion]) {
+			preReleaseVersions = append(preReleaseVersions, origVersion)
+		} else {
+			stableVersions = append(stableVersions, origVersion)
+		}
+	}
+
+	// If we have stable versions, use those; otherwise fall back to pre-release
+	var candidateVersions []string
+	if len(stableVersions) > 0 {
+		candidateVersions = stableVersions
+	} else {
+		candidateVersions = preReleaseVersions
+	}
+
+	// Sort the candidate versions
+	sort.Slice(candidateVersions, func(i, j int) bool {
+		return compareVersions(candidateVersions[i], candidateVersions[j]) < 0
+	})
+
+	if len(candidateVersions) == 0 {
+		return "", fmt.Errorf("no valid versions found")
+	}
+
+	return versionMap[candidateVersions[len(candidateVersions)-1]], nil
 }

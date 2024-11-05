@@ -134,3 +134,57 @@ func TestParseHTMLForLatestVersionPreferStable(t *testing.T) {
 		t.Errorf("Expected latest version %s, but got %s", expectedVersion, latestVersion)
 	}
 }
+
+func TestSelectLatestStableVersion(t *testing.T) {
+	testCases := []struct {
+		name     string
+		versions []string
+		want     string
+		wantErr  bool
+	}{
+		{
+			name:     "prefer stable over beta",
+			versions: []string{"1.0.0", "1.1.0b1", "1.0.1"},
+			want:     "1.0.1",
+		},
+		{
+			name:     "prefer stable over rc",
+			versions: []string{"2.0.0rc1", "1.9.9", "2.0.0rc2"},
+			want:     "1.9.9",
+		},
+		{
+			name:     "use highest stable version",
+			versions: []string{"1.0.0", "1.1.0", "1.0.1"},
+			want:     "1.1.0",
+		},
+		{
+			name:     "fallback to pre-release if no stable",
+			versions: []string{"1.0.0b1", "1.0.0b2", "1.0.0rc1"},
+			want:     "1.0.0rc1",
+		},
+		{
+			name:     "complex version numbers",
+			versions: []string{"1.0.0", "1.0.1alpha", "1.0.1beta", "1.0.1rc1", "1.0.1"},
+			want:     "1.0.1",
+		},
+		{
+			name:     "empty input",
+			versions: []string{},
+			wantErr:  true,
+		},
+	}
+
+	pypi := New(true)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pypi.selectLatestStableVersion(tc.versions)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("selectLatestStableVersion() error = %v, wantErr %v", err, tc.wantErr)
+				return
+			}
+			if got != tc.want {
+				t.Errorf("selectLatestStableVersion() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
