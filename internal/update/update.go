@@ -14,21 +14,32 @@ import (
 	semv "github.com/Masterminds/semver/v3"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/rvben/ru/internal/packagemanager"
 	"github.com/rvben/ru/internal/packagemanager/npm"
+	"github.com/rvben/ru/internal/packagemanager/pypi"
 	"github.com/rvben/ru/internal/utils"
 	ignore "github.com/sabhiram/go-gitignore"
 )
 
 type Updater struct {
-	pm             packagemanager.PackageManager
+	pypi           *pypi.PyPI
+	npm            *npm.NPM
 	filesUpdated   int
-	modulesUpdated int
 	filesUnchanged int
+	modulesUpdated int
 }
 
-func NewUpdater(pm packagemanager.PackageManager) *Updater {
-	return &Updater{pm: pm}
+func New(noCache bool) *Updater {
+	return &Updater{
+		pypi:           pypi.New(noCache),
+		npm:            npm.New(),
+		filesUpdated:   0,
+		filesUnchanged: 0,
+		modulesUpdated: 0,
+	}
+}
+
+func (u *Updater) Run() error {
+	return u.ProcessDirectory(".")
 }
 
 func (u *Updater) ProcessDirectory(path string) error {
@@ -160,7 +171,7 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		utils.VerboseLog("Processing package:", packageName)
 
 		g.Go(func() error {
-			latestVersion, err := u.pm.GetLatestVersion(packageName)
+			latestVersion, err := u.pypi.GetLatestVersion(packageName)
 			if err != nil {
 				return fmt.Errorf("%s:%d: failed to get latest version for package %s: %w", filePath, lineNumber, packageName, err)
 			}

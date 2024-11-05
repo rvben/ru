@@ -6,17 +6,17 @@ import (
 	"net/http"
 )
 
-type NpmPackageManager struct {
+type NPM struct {
 	registryURL string
 }
 
-func New() *NpmPackageManager {
-	return &NpmPackageManager{
+func New() *NPM {
+	return &NPM{
 		registryURL: "https://registry.npmjs.org",
 	}
 }
 
-func (n *NpmPackageManager) GetLatestVersion(packageName string) (string, error) {
+func (n *NPM) GetLatestVersion(packageName string) (string, error) {
 	url := fmt.Sprintf("%s/%s/latest", n.registryURL, packageName)
 	resp, err := http.Get(url)
 	if err != nil {
@@ -38,6 +38,6 @@ func (n *NpmPackageManager) GetLatestVersion(packageName string) (string, error)
 	return data.Version, nil
 }
 
-func (n *NpmPackageManager) SetCustomIndexURL(url string) {
+func (n *NPM) SetCustomIndexURL(url string) {
 	n.registryURL = url
 }
