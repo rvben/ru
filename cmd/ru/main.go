@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 
@@ -51,13 +51,61 @@ func selfUpdate() error {
 
 	fmt.Printf("Updating ru from %s to %s...\n", version, latestVersion)
 
-	// Use go install to update the binary
-	cmd := exec.Command("go", "install", "github.com/rvben/ru/cmd/ru@latest")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Get the binary path
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to update ru: %w", err)
+	// Construct download URL for the latest release
+	arch := runtime.GOARCH
+	goos := runtime.GOOS
+	binaryName := "ru"
+	if goos == "windows" {
+		binaryName += ".exe"
+	}
+
+	downloadURL := fmt.Sprintf(
+		"https://github.com/rvben/ru/releases/download/v%s/ru_%s_%s",
+		latestVersion,
+		goos,
+		arch,
+	)
+
+	// For debugging
+	utils.VerboseLog("Downloading from:", downloadURL)
+
+	// Download the new binary
+	resp, err := http.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("failed to download update: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download update, status: %s", resp.Status)
+	}
+
+	// Create temporary file
+	tmpFile, err := os.CreateTemp("", "ru-update")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// Copy the downloaded binary to temporary file
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		return fmt.Errorf("failed to write temporary file: %w", err)
+	}
+
+	// Make the temporary file executable
+	if err := os.Chmod(tmpFile.Name(), 0755); err != nil {
+		return fmt.Errorf("failed to make temporary file executable: %w", err)
+	}
+
+	// Replace the old binary
+	if err := os.Rename(tmpFile.Name(), execPath); err != nil {
+		return fmt.Errorf("failed to replace binary: %w", err)
 	}
 
 	fmt.Printf("Successfully updated ru to version %s\n", latestVersion)

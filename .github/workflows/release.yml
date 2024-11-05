@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          check-latest: true
+
+      - name: Build Binaries
+        run: |
+          # Build for each OS/arch combination
+          GOOS=linux GOARCH=amd64 go build -o ru_linux_amd64 ./cmd/ru
+          GOOS=linux GOARCH=arm64 go build -o ru_linux_arm64 ./cmd/ru
+          GOOS=darwin GOARCH=amd64 go build -o ru_darwin_amd64 ./cmd/ru
+          GOOS=darwin GOARCH=arm64 go build -o ru_darwin_arm64 ./cmd/ru
+          GOOS=windows GOARCH=amd64 go build -o ru_windows_amd64.exe ./cmd/ru
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ru_linux_amd64
+            ru_linux_arm64
+            ru_darwin_amd64
+            ru_darwin_arm64
+            ru_windows_amd64.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
