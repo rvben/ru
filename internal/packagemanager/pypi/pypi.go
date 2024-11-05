@@ -158,6 +158,7 @@ func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 
 func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 	var versions []string
+	seenVersions := make(map[string]bool) // To prevent duplicates
 
 	z := html.NewTokenizer(resp.Body)
 	for {
@@ -165,7 +166,13 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 		switch {
 		case tt == html.ErrorToken:
 			if z.Err() == io.EOF {
-				return p.selectLatestStableVersion(versions)
+				utils.VerboseLog("Found versions:", versions)
+				version, err := p.selectLatestStableVersion(versions)
+				if err != nil {
+					return "", fmt.Errorf("error selecting latest version: %w", err)
+				}
+				utils.VerboseLog("Selected version:", version)
+				return version, nil
 			}
 			return "", z.Err()
 
@@ -177,7 +184,13 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 						versionPath := strings.Trim(a.Val, "/")
 						parts := strings.Split(versionPath, "/")
 						if len(parts) > 0 {
-							versions = append(versions, parts[0])
+							version := parts[0]
+							// Only add if we haven't seen this version before
+							if !seenVersions[version] {
+								versions = append(versions, version)
+								seenVersions[version] = true
+								utils.VerboseLog("Found version:", version, "IsPrerelease:", isPrerelease(version))
+							}
 						}
 					}
 				}
@@ -249,30 +262,29 @@ func (p *PyPI) selectLatestStableVersion(versions []string) (string, error) {
 		return "", fmt.Errorf("no versions found")
 	}
 
-	// Map to store original versions
-	versionMap := make(map[string]string)
-	for _, v := range versions {
-		cleanVersion := stripPrereleaseSuffix(v)
-		versionMap[cleanVersion] = v
-	}
+	utils.VerboseLog("Selecting from versions:", versions)
 
 	// Separate stable and pre-release versions
 	var stableVersions []string
 	var preReleaseVersions []string
 
-	for origVersion := range versionMap {
-		if isPrerelease(versionMap[origVersion]) {
-			preReleaseVersions = append(preReleaseVersions, origVersion)
+	for _, version := range versions {
+		if isPrerelease(version) {
+			utils.VerboseLog("Pre-release version:", version)
+			preReleaseVersions = append(preReleaseVersions, version)
 		} else {
-			stableVersions = append(stableVersions, origVersion)
+			utils.VerboseLog("Stable version:", version)
+			stableVersions = append(stableVersions, version)
 		}
 	}
 
 	// If we have stable versions, use those; otherwise fall back to pre-release
 	var candidateVersions []string
 	if len(stableVersions) > 0 {
+		utils.VerboseLog("Using stable versions:", stableVersions)
 		candidateVersions = stableVersions
 	} else {
+		utils.VerboseLog("No stable versions found, using pre-release versions:", preReleaseVersions)
 		candidateVersions = preReleaseVersions
 	}
 
@@ -285,5 +297,7 @@ func (p *PyPI) selectLatestStableVersion(versions []string) (string, error) {
 		return "", fmt.Errorf("no valid versions found")
 	}
 
-	return versionMap[candidateVersions[len(candidateVersions)-1]], nil
+	result := candidateVersions[len(candidateVersions)-1]
+	utils.VerboseLog("Selected version:", result)
+	return result, nil
 }

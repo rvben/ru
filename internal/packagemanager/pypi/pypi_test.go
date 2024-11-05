@@ -20,9 +20,22 @@ func TestGetLatestVersion(t *testing.T) {
 	// Expected latest version in the mock JSON response
 	expectedVersion := "3.1.0"
 
-	// Create a mock JSON response
-	mockResponse := MockPyPIResponse{}
+	// Create a mock JSON response that matches the actual PyPI API structure
+	mockResponse := struct {
+		Info struct {
+			Version string `json:"version"`
+		} `json:"info"`
+		Releases map[string]interface{} `json:"releases"`
+	}{}
+
+	// Add both info and releases data
 	mockResponse.Info.Version = expectedVersion
+	mockResponse.Releases = map[string]interface{}{
+		"3.0.0":    []interface{}{},
+		"3.1.0":    []interface{}{},
+		"3.2.0rc1": []interface{}{},
+	}
+
 	responseData, err := json.Marshal(mockResponse)
 	if err != nil {
 		t.Fatalf("Failed to marshal mock response: %v", err)
