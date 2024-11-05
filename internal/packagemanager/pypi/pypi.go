@@ -153,7 +153,7 @@ func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 
 func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 	var versions []string
-	originalVersions := make(map[string]string)
+	versionMap := make(map[string]string)
 
 	z := html.NewTokenizer(resp.Body)
 	for {
@@ -163,21 +163,37 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 			if len(versions) == 0 {
 				return "", fmt.Errorf("no versions found")
 			}
-			// Sort versions and prefer stable releases over pre-releases
-			sort.Slice(versions, func(i, j int) bool {
-				v1IsPrerelease := isPrerelease(versions[i])
-				v2IsPrerelease := isPrerelease(versions[j])
 
-				// If one is prerelease and the other isn't, prefer the stable version
-				if v1IsPrerelease != v2IsPrerelease {
-					return v2IsPrerelease // Stable versions come last (higher)
+			// First, separate stable and pre-release versions
+			var stableVersions []string
+			var preReleaseVersions []string
+
+			for _, v := range versions {
+				if isPrerelease(versionMap[v]) {
+					preReleaseVersions = append(preReleaseVersions, v)
+				} else {
+					stableVersions = append(stableVersions, v)
 				}
+			}
 
-				// Otherwise, compare versions normally
-				return compareVersions(versions[i], versions[j]) < 0
+			// If we have stable versions, use those; otherwise fall back to pre-release
+			var candidateVersions []string
+			if len(stableVersions) > 0 {
+				candidateVersions = stableVersions
+			} else {
+				candidateVersions = preReleaseVersions
+			}
+
+			// Sort the candidate versions
+			sort.Slice(candidateVersions, func(i, j int) bool {
+				return compareVersions(candidateVersions[i], candidateVersions[j]) < 0
 			})
-			latestVersion := versions[len(versions)-1]
-			return originalVersions[latestVersion], nil
+
+			if len(candidateVersions) == 0 {
+				return "", fmt.Errorf("no valid versions found")
+			}
+
+			return versionMap[candidateVersions[len(candidateVersions)-1]], nil
 
 		case tt == html.StartTagToken:
 			t := z.Token()
@@ -186,18 +202,53 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 					if a.Key == "href" {
 						versionPath := strings.Trim(a.Val, "/")
 						parts := strings.Split(versionPath, "/")
-						versionStr := parts[0]
+						originalVersion := parts[0]
 
-						// Skip pre-release versions when comparing
-						parsedVersionStr := stripPrereleaseSuffix(versionStr)
-
-						versions = append(versions, parsedVersionStr)
-						originalVersions[parsedVersionStr] = versionStr
+						// Store both the cleaned version (for comparison) and original version
+						cleanVersion := stripPrereleaseSuffix(originalVersion)
+						versions = append(versions, cleanVersion)
+						versionMap[cleanVersion] = originalVersion
 					}
 				}
 			}
 		}
 	}
+}
+
+// compareVersions compares two version strings
+func compareVersions(v1, v2 string) int {
+	// Split version strings into parts
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+
+	// Compare each part
+	maxLen := len(parts1)
+	if len(parts2) > maxLen {
+		maxLen = len(parts2)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var num1, num2 int
+
+		// Get number from first version, defaulting to 0 if part doesn't exist
+		if i < len(parts1) {
+			num1, _ = strconv.Atoi(parts1[i])
+		}
+
+		// Get number from second version, defaulting to 0 if part doesn't exist
+		if i < len(parts2) {
+			num2, _ = strconv.Atoi(parts2[i])
+		}
+
+		if num1 < num2 {
+			return -1
+		}
+		if num1 > num2 {
+			return 1
+		}
+	}
+
+	return 0
 }
 
 // isPrerelease checks if a version string contains pre-release indicators
@@ -218,35 +269,6 @@ func isPrerelease(version string) bool {
 
 // stripPrereleaseSuffix removes pre-release suffixes for version comparison
 func stripPrereleaseSuffix(version string) string {
-	// Use regex to strip unwanted suffixes for comparison
 	re := regexp.MustCompile(`(\.post\d+|\.dev\d+|a\d*|b\d*|c\d*|rc\d*|alpha\d*|beta\d*|preview\d*|[-+].*)$`)
 	return re.ReplaceAllString(version, "")
-}
-
-func compareVersions(v1, v2 string) int {
-	parts1 := strings.Split(v1, ".")
-	parts2 := strings.Split(v2, ".")
-
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var p1, p2 int
-		if i < len(parts1) {
-			p1, _ = strconv.Atoi(parts1[i])
-		}
-		if i < len(parts2) {
-			p2, _ = strconv.Atoi(parts2[i])
-		}
-
-		if p1 < p2 {
-			return -1
-		} else if p1 > p2 {
-			return 1
-		}
-	}
-
-	return 0
 }
