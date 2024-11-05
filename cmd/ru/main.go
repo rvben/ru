@@ -16,8 +16,8 @@ import (
 	"github.com/rvben/ru/internal/utils"
 )
 
-// version is the current version of the tool
-const version = "0.1.59"
+// version is set during build
+var version = "dev" // Default to "dev" for development builds
 
 type GithubRelease struct {
 	TagName string `json:"tag_name"`
