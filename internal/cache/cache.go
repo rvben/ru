@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,7 @@ const cacheExpiry = 60 * time.Minute
 
 type Cache struct {
 	data map[string]CacheItem
+	mu   sync.RWMutex
 }
 
 type CacheItem struct {
@@ -21,7 +23,9 @@ type CacheItem struct {
 }
 
 func NewCache() *Cache {
-	return &Cache{data: make(map[string]CacheItem)}
+	return &Cache{
+		data: make(map[string]CacheItem),
+	}
 }
 
 func (c *Cache) getCacheDir() (string, error) {
@@ -47,6 +51,8 @@ func (c *Cache) Load() error {
 	}
 	defer file.Close()
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return json.NewDecoder(file).Decode(&c.data)
 }
 
@@ -65,34 +71,45 @@ func (c *Cache) Save() error {
 	}
 	defer file.Close()
 
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return json.NewEncoder(file).Encode(c.data)
 }
 
-func (c *Cache) Get(packageName string) (string, bool) {
-	item, found := c.data[packageName]
-	if !found || time.Since(item.Timestamp) > cacheExpiry {
+func (c *Cache) Get(key string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	item, exists := c.data[key]
+	if !exists {
 		return "", false
 	}
+
+	if time.Since(item.Timestamp) > cacheExpiry {
+		return "", false
+	}
+
 	return item.Version, true
 }
 
-func (c *Cache) Set(packageName, version string) {
-	c.data[packageName] = CacheItem{
+func (c *Cache) Set(key, version string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.data[key] = CacheItem{
 		Version:   version,
 		Timestamp: time.Now(),
 	}
 }
 
 func Clean() error {
-	cacheDir, err := os.UserCacheDir()
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("error getting cache directory: %w", err)
+		return fmt.Errorf("failed to get home directory: %w", err)
 	}
-
-	cacheFile := filepath.Join(cacheDir, "ru", "versions.json")
-	if err := os.Remove(cacheFile); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("error removing cache file: %w", err)
+	cacheDir := filepath.Join(homeDir, cacheDirName)
+	if err := os.RemoveAll(cacheDir); err != nil {
+		return fmt.Errorf("failed to remove cache directory: %w", err)
 	}
-
 	return nil
 }

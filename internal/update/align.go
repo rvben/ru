@@ -33,7 +33,6 @@ func NewAligner() *Aligner {
 func (a *Aligner) Run() error {
 	// Load .gitignore file
 	ignoreFile := filepath.Join(".", ".gitignore")
-	var err error
 	if _, err := os.Stat(ignoreFile); err == nil {
 		a.ignorer, err = ignore.CompileIgnoreFile(ignoreFile)
 		if err != nil {
