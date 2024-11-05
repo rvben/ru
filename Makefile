@@ -10,4 +10,7 @@ test:
 	go test -v ./...
 
 run:
-	go run cmd/ru/main.go update
+	go run cmd/ru/main.go update 
+
+self-update:
+	go run cmd/ru/main.go self-update
