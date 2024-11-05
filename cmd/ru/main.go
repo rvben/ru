@@ -17,7 +17,7 @@ import (
 )
 
 // version is the current version of the tool
-const version = "0.1.53"
+const version = "0.1.54"
 
 type GithubRelease struct {
 	TagName string `json:"tag_name"`
