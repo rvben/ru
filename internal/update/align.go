@@ -51,13 +51,26 @@ func (a *Aligner) Run() error {
 
 func (a *Aligner) collectVersions(path string) error {
 	return filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
 			return err
 		}
 
+		// Skip directories that are in .gitignore
+		if info.IsDir() {
+			if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
+				utils.VerboseLog("Ignoring directory:", filePath)
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		// Check if the file should be ignored
-		if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
-			utils.VerboseLog("Ignoring:", filePath)
+		relPath, err := filepath.Rel(".", filePath)
+		if err != nil {
+			return err
+		}
+		if a.ignorer != nil && a.ignorer.MatchesPath(relPath) {
+			utils.VerboseLog("Ignoring file:", relPath)
 			return nil
 		}
 
@@ -154,13 +167,26 @@ func (a *Aligner) collectNPMVersions(filePath string) error {
 
 func (a *Aligner) alignVersions(path string) error {
 	return filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
 			return err
 		}
 
+		// Skip directories that are in .gitignore
+		if info.IsDir() {
+			if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
+				utils.VerboseLog("Ignoring directory:", filePath)
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		// Check if the file should be ignored
-		if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
-			utils.VerboseLog("Ignoring:", filePath)
+		relPath, err := filepath.Rel(".", filePath)
+		if err != nil {
+			return err
+		}
+		if a.ignorer != nil && a.ignorer.MatchesPath(relPath) {
+			utils.VerboseLog("Ignoring file:", relPath)
 			return nil
 		}
 
