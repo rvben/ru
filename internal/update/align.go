@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	semv "github.com/Masterminds/semver/v3"
 	"github.com/rvben/ru/internal/utils"
 )
 
@@ -74,7 +75,17 @@ func (a *Aligner) collectPythonVersions(filePath string) error {
 			pkg, version := matches[1], matches[2]
 			if existingVersion, ok := a.pythonVersions[pkg]; ok {
 				// Keep the higher version
-				if compareVersions(version, existingVersion) > 0 {
+				v1, err := semv.NewVersion(version)
+				if err != nil {
+					utils.VerboseLog("Warning: Invalid version format:", version)
+					continue
+				}
+				v2, err := semv.NewVersion(existingVersion)
+				if err != nil {
+					utils.VerboseLog("Warning: Invalid version format:", existingVersion)
+					continue
+				}
+				if v1.GreaterThan(v2) {
 					a.pythonVersions[pkg] = version
 				}
 			} else {
@@ -104,7 +115,17 @@ func (a *Aligner) collectNPMVersions(filePath string) error {
 		version = strings.TrimLeft(version, "^~>=<")
 		if existingVersion, ok := a.npmVersions[name]; ok {
 			// Keep the higher version
-			if compareVersions(version, existingVersion) > 0 {
+			v1, err := semv.NewVersion(version)
+			if err != nil {
+				utils.VerboseLog("Warning: Invalid version format:", version)
+				continue
+			}
+			v2, err := semv.NewVersion(existingVersion)
+			if err != nil {
+				utils.VerboseLog("Warning: Invalid version format:", existingVersion)
+				continue
+			}
+			if v1.GreaterThan(v2) {
 				a.npmVersions[name] = version
 			}
 		} else {
