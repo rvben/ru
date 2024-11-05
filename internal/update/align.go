@@ -11,6 +11,7 @@ import (
 
 	semv "github.com/Masterminds/semver/v3"
 	"github.com/rvben/ru/internal/utils"
+	ignore "github.com/sabhiram/go-gitignore"
 )
 
 type Aligner struct {
@@ -19,6 +20,7 @@ type Aligner struct {
 	filesUpdated   int
 	filesUnchanged int
 	modulesUpdated int
+	ignorer        *ignore.GitIgnore
 }
 
 func NewAligner() *Aligner {
@@ -29,6 +31,16 @@ func NewAligner() *Aligner {
 }
 
 func (a *Aligner) Run() error {
+	// Load .gitignore file
+	ignoreFile := filepath.Join(".", ".gitignore")
+	var err error
+	if _, err := os.Stat(ignoreFile); err == nil {
+		a.ignorer, err = ignore.CompileIgnoreFile(ignoreFile)
+		if err != nil {
+			return fmt.Errorf("error compiling .gitignore file: %w", err)
+		}
+	}
+
 	// First pass: collect all versions
 	if err := a.collectVersions("."); err != nil {
 		return err
@@ -42,6 +54,12 @@ func (a *Aligner) collectVersions(path string) error {
 	return filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
+		}
+
+		// Check if the file should be ignored
+		if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
+			utils.VerboseLog("Ignoring:", filePath)
+			return nil
 		}
 
 		switch {
@@ -139,6 +157,12 @@ func (a *Aligner) alignVersions(path string) error {
 	return filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
+		}
+
+		// Check if the file should be ignored
+		if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
+			utils.VerboseLog("Ignoring:", filePath)
+			return nil
 		}
 
 		switch {
