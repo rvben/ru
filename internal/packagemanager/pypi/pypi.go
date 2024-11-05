@@ -163,7 +163,17 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 			if len(versions) == 0 {
 				return "", fmt.Errorf("no versions found")
 			}
+			// Sort versions and prefer stable releases over pre-releases
 			sort.Slice(versions, func(i, j int) bool {
+				v1IsPrerelease := isPrerelease(versions[i])
+				v2IsPrerelease := isPrerelease(versions[j])
+
+				// If one is prerelease and the other isn't, prefer the stable version
+				if v1IsPrerelease != v2IsPrerelease {
+					return v2IsPrerelease // Stable versions come last (higher)
+				}
+
+				// Otherwise, compare versions normally
 				return compareVersions(versions[i], versions[j]) < 0
 			})
 			latestVersion := versions[len(versions)-1]
@@ -178,9 +188,8 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 						parts := strings.Split(versionPath, "/")
 						versionStr := parts[0]
 
-						// Use regex to strip unwanted suffixes for comparison
-						re := regexp.MustCompile(`(\.post\d+|\.dev\d+|a\d*|b\d*|rc\d*|[-+].*)$`)
-						parsedVersionStr := re.ReplaceAllString(versionStr, "")
+						// Skip pre-release versions when comparing
+						parsedVersionStr := stripPrereleaseSuffix(versionStr)
 
 						versions = append(versions, parsedVersionStr)
 						originalVersions[parsedVersionStr] = versionStr
@@ -189,6 +198,29 @@ func (p *PyPI) parseHTMLForLatestVersion(resp *http.Response) (string, error) {
 			}
 		}
 	}
+}
+
+// isPrerelease checks if a version string contains pre-release indicators
+func isPrerelease(version string) bool {
+	prereleaseIndicators := []string{
+		"a", "b", "c", "rc", "alpha", "beta", "dev", "preview",
+		".dev", ".a", ".b", ".rc", "-a", "-b", "-rc",
+	}
+
+	versionLower := strings.ToLower(version)
+	for _, indicator := range prereleaseIndicators {
+		if strings.Contains(versionLower, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripPrereleaseSuffix removes pre-release suffixes for version comparison
+func stripPrereleaseSuffix(version string) string {
+	// Use regex to strip unwanted suffixes for comparison
+	re := regexp.MustCompile(`(\.post\d+|\.dev\d+|a\d*|b\d*|c\d*|rc\d*|alpha\d*|beta\d*|preview\d*|[-+].*)$`)
+	return re.ReplaceAllString(version, "")
 }
 
 func compareVersions(v1, v2 string) int {

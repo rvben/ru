@@ -93,3 +93,44 @@ func TestParseHTMLForLatestVersion(t *testing.T) {
 		t.Errorf("Expected latest version %s, but got %s", expectedVersion, latestVersion)
 	}
 }
+
+func TestParseHTMLForLatestVersionPreferStable(t *testing.T) {
+	// Sample HTML input with mixed stable and pre-release versions
+	htmlContent := `<!DOCTYPE html>
+	<html><head>
+    <title>Links for pyyaml</title>
+	</head>
+	<body>
+		<h1>Links for pyyaml</h1>
+		<a href="6.0.1/pyyaml-6.0.1.tar.gz">pyyaml-6.0.1.tar.gz</a>
+		<br>
+		<a href="6.0.2rc1/pyyaml-6.0.2rc1.tar.gz">pyyaml-6.0.2rc1.tar.gz</a>
+		<br>
+		<a href="6.0.2/pyyaml-6.0.2.tar.gz">pyyaml-6.0.2.tar.gz</a>
+		<br>
+		<a href="6.0.3b1/pyyaml-6.0.3b1.tar.gz">pyyaml-6.0.3b1.tar.gz</a>
+		<br>
+	</body></html>`
+
+	// Create a mock HTTP response from the HTML content
+	response := &http.Response{
+		Body: io.NopCloser(strings.NewReader(htmlContent)),
+	}
+
+	// Create a PyPI instance
+	pypi := New(true)
+
+	// Call the function to test
+	latestVersion, err := pypi.parseHTMLForLatestVersion(response)
+	if err != nil {
+		t.Fatalf("parseHTMLForLatestVersion failed: %v", err)
+	}
+
+	// Define the expected latest version
+	expectedVersion := "6.0.2"
+
+	// Check if the returned latest version is correct
+	if latestVersion != expectedVersion {
+		t.Errorf("Expected latest version %s, but got %s", expectedVersion, latestVersion)
+	}
+}
