@@ -17,7 +17,7 @@ import (
 )
 
 // version is the current version of the tool
-const version = "0.1.54"
+const version = "0.1.55"
 
 type GithubRelease struct {
 	TagName string `json:"tag_name"`
@@ -121,7 +121,7 @@ func main() {
 	args := os.Args[1:]
 	command := ""
 	for i, arg := range args {
-		if arg == "update" || arg == "version" || arg == "help" || arg == "clean-cache" || arg == "self-update" {
+		if arg == "update" || arg == "version" || arg == "help" || arg == "clean-cache" || arg == "self-update" || arg == "align" {
 			command = arg
 			args = append(args[:i], args[i+1:]...)
 			break
@@ -150,6 +150,11 @@ func main() {
 		if err := selfUpdate(); err != nil {
 			log.Fatalf("Failed to self-update: %v", err)
 		}
+	case "align":
+		aligner := update.NewAligner()
+		if err := aligner.Run(); err != nil {
+			log.Fatal(err)
+		}
 	case "help":
 		fmt.Println("Usage: ru [flags] <command>")
 		fmt.Println("\nCommands:")
@@ -157,6 +162,7 @@ func main() {
 		fmt.Println("  version      Show version information")
 		fmt.Println("  clean-cache  Clean the version cache")
 		fmt.Println("  self-update  Update ru to the latest version")
+		fmt.Println("  align        Align package versions with existing versions")
 		fmt.Println("  help         Show this help message")
 		fmt.Println("\nFlags:")
 		flag.PrintDefaults()
