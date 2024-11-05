@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pelletier/go-toml/v2"
 	"github.com/rvben/ru/internal/utils"
 )
 
@@ -22,7 +21,7 @@ type PyProject struct {
 	} `toml:"tool"`
 }
 
-func (p *PyProject) shouldIgnorePackage(packageName string) bool {
+func (p *PyProject) ShouldIgnorePackage(packageName string) bool {
 	for _, ignored := range p.Tool.Ru.IgnoreUpdates {
 		if ignored == packageName {
 			utils.VerboseLog("Ignoring package:", packageName)
@@ -41,7 +40,7 @@ func (p *PyProject) UpdateVersions(versions map[string]string) (bool, error) {
 		for i, dep := range deps {
 			switch v := dep.(type) {
 			case string:
-				if pkg := getPackageName(v); p.shouldIgnorePackage(pkg) {
+				if pkg := getPackageName(v); p.ShouldIgnorePackage(pkg) {
 					continue
 				}
 				if newDep, changed := updateDependencyVersion(v, versions); changed {
@@ -61,7 +60,7 @@ func (p *PyProject) UpdateVersions(versions map[string]string) (bool, error) {
 
 	// Update project dependencies
 	for i, dep := range p.Project.Dependencies {
-		if pkg := getPackageName(dep); p.shouldIgnorePackage(pkg) {
+		if pkg := getPackageName(dep); p.ShouldIgnorePackage(pkg) {
 			continue
 		}
 		if newDep, changed := updateDependencyVersion(dep, versions); changed {
@@ -73,7 +72,7 @@ func (p *PyProject) UpdateVersions(versions map[string]string) (bool, error) {
 	// Update optional dependencies
 	for _, deps := range p.Project.OptionalDependencies {
 		for i, dep := range deps {
-			if pkg := getPackageName(dep); p.shouldIgnorePackage(pkg) {
+			if pkg := getPackageName(dep); p.ShouldIgnorePackage(pkg) {
 				continue
 			}
 			if newDep, changed := updateDependencyVersion(dep, versions); changed {
@@ -128,37 +127,81 @@ func getPackageName(dep string) string {
 
 func LoadAndUpdate(filename string, versions map[string]string) error {
 	// Read the file
-	data, err := os.ReadFile(filename)
+	content, err := os.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read pyproject.toml: %w", err)
 	}
 
-	// Parse TOML
-	var pyproject PyProject
-	if err := toml.Unmarshal(data, &pyproject); err != nil {
-		return fmt.Errorf("failed to parse pyproject.toml: %w", err)
-	}
+	lines := strings.Split(string(content), "\n")
+	updated := false
+	inDependencies := false
+	inOptionalDependencies := false
+	var lastDepIndex int
 
-	// Update versions
-	updated, err := pyproject.UpdateVersions(versions)
-	if err != nil {
-		return fmt.Errorf("failed to update versions: %w", err)
+	// Process line by line
+	for i, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+
+		// Track sections
+		if strings.HasPrefix(trimmedLine, "[project.optional-dependencies]") {
+			inOptionalDependencies = true
+			inDependencies = false
+			continue
+		} else if strings.HasPrefix(trimmedLine, "[project]") {
+			inDependencies = true
+			inOptionalDependencies = false
+			continue
+		} else if strings.HasPrefix(trimmedLine, "[") {
+			inDependencies = false
+			inOptionalDependencies = false
+			continue
+		}
+
+		// Skip empty lines or section headers
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "[") {
+			continue
+		}
+
+		// Process dependencies
+		if (inDependencies && strings.Contains(trimmedLine, "==")) ||
+			(inOptionalDependencies && strings.Contains(trimmedLine, "==")) {
+			parts := strings.Split(trimmedLine, "==")
+			if len(parts) != 2 {
+				continue
+			}
+
+			packageName := strings.Trim(strings.TrimSpace(parts[0]), "\"'")
+			if newVersion, ok := versions[packageName]; ok {
+				// Preserve indentation and quotes
+				indent := strings.Repeat(" ", len(line)-len(strings.TrimLeft(line, " ")))
+				quote := ""
+				if strings.Contains(line, "\"") {
+					quote = "\""
+				} else if strings.Contains(line, "'") {
+					quote = "'"
+				}
+
+				// Add comma to previous dependency if this isn't the first one
+				if lastDepIndex > 0 && !strings.HasSuffix(lines[lastDepIndex], ",") {
+					lines[lastDepIndex] = lines[lastDepIndex] + ","
+				}
+
+				lines[i] = fmt.Sprintf("%s%s%s==%s%s", indent, quote, packageName, newVersion, quote)
+				lastDepIndex = i
+				updated = true
+			}
+		}
 	}
 
 	if !updated {
 		return nil
 	}
 
-	// Marshal back to TOML
-	newData, err := toml.Marshal(pyproject)
-	if err != nil {
-		return fmt.Errorf("failed to marshal updated pyproject.toml: %w", err)
+	// Write back to file
+	output := strings.Join(lines, "\n")
+	if !strings.HasSuffix(output, "\n") {
+		output += "\n"
 	}
 
-	// Write the file
-	if err := os.WriteFile(filename, newData, 0644); err != nil {
-		return fmt.Errorf("failed to write updated pyproject.toml: %w", err)
-	}
-
-	return nil
+	return os.WriteFile(filename, []byte(output), 0644)
 }

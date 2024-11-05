@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	semv "github.com/Masterminds/semver/v3"
+	"github.com/pelletier/go-toml/v2"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/rvben/ru/internal/packagemanager/npm"
@@ -384,10 +385,51 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 func (u *Updater) updatePyProjectFile(filePath string) error {
 	utils.VerboseLog("Processing pyproject.toml file:", filePath)
 
-	// Collect all versions first
-	versions := make(map[string]string)
+	// Read original content to preserve formatting
+	originalContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("%s: %w", filePath, err)
+	}
 
-	// Process the file
+	var proj pyproject.PyProject
+	if err := toml.Unmarshal(originalContent, &proj); err != nil {
+		return fmt.Errorf("%s: failed to parse pyproject.toml: %w", filePath, err)
+	}
+
+	// Collect versions
+	versions := make(map[string]string)
+	var g errgroup.Group
+	var mu sync.Mutex
+
+	for _, dep := range proj.Project.Dependencies {
+		parts := strings.Split(dep, "==")
+		if len(parts) != 2 {
+			continue
+		}
+		packageName := strings.TrimSpace(parts[0])
+
+		if proj.ShouldIgnorePackage(packageName) {
+			continue
+		}
+
+		g.Go(func() error {
+			latestVersion, err := u.pypi.GetLatestVersion(packageName)
+			if err != nil {
+				return fmt.Errorf("failed to get latest version for package %s: %w", packageName, err)
+			}
+
+			mu.Lock()
+			versions[packageName] = latestVersion
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Call the package-level function instead of a method
 	if err := pyproject.LoadAndUpdate(filePath, versions); err != nil {
 		return fmt.Errorf("%s: %w", filePath, err)
 	}
