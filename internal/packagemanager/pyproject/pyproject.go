@@ -135,7 +135,7 @@ func LoadAndUpdate(filename string, versions map[string]string) error {
 	lines := strings.Split(string(content), "\n")
 	updated := false
 	inDependencies := false
-	inOptionalDependencies := false
+	inGroup := false
 	var lastDepIndex int
 
 	// Process line by line
@@ -143,29 +143,35 @@ func LoadAndUpdate(filename string, versions map[string]string) error {
 		trimmedLine := strings.TrimSpace(line)
 
 		// Track sections
-		if strings.HasPrefix(trimmedLine, "[project.optional-dependencies]") {
-			inOptionalDependencies = true
-			inDependencies = false
-			continue
-		} else if strings.HasPrefix(trimmedLine, "[project]") {
+		if strings.HasPrefix(trimmedLine, "[project]") {
 			inDependencies = true
-			inOptionalDependencies = false
+			inGroup = false
+			continue
+		} else if strings.HasPrefix(trimmedLine, "[dependency-groups]") {
+			inDependencies = false
+			inGroup = false
+			continue
+		} else if strings.HasSuffix(trimmedLine, "= [") {
+			inGroup = true
+			inDependencies = false
+			lastDepIndex = 0 // Reset lastDepIndex for new group
 			continue
 		} else if strings.HasPrefix(trimmedLine, "[") {
 			inDependencies = false
-			inOptionalDependencies = false
+			inGroup = false
 			continue
 		}
 
-		// Skip empty lines or section headers
-		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "[") {
+		// Skip empty lines, section headers, or group includes
+		if trimmedLine == "" ||
+			strings.HasPrefix(trimmedLine, "[") ||
+			strings.Contains(trimmedLine, "include-group") {
 			continue
 		}
 
 		// Process dependencies
-		if (inDependencies && strings.Contains(trimmedLine, "==")) ||
-			(inOptionalDependencies && strings.Contains(trimmedLine, "==")) {
-			parts := strings.Split(trimmedLine, "==")
+		if (inDependencies || inGroup) && strings.Contains(trimmedLine, ">=") {
+			parts := strings.Split(trimmedLine, ">=")
 			if len(parts) != 2 {
 				continue
 			}
@@ -186,7 +192,7 @@ func LoadAndUpdate(filename string, versions map[string]string) error {
 					lines[lastDepIndex] = lines[lastDepIndex] + ","
 				}
 
-				lines[i] = fmt.Sprintf("%s%s%s==%s%s", indent, quote, packageName, newVersion, quote)
+				lines[i] = fmt.Sprintf("%s%s%s>=%s%s", indent, quote, packageName, newVersion, quote)
 				lastDepIndex = i
 				updated = true
 			}
