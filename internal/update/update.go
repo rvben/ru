@@ -28,27 +28,74 @@ type Updater struct {
 	filesUpdated   int
 	filesUnchanged int
 	modulesUpdated int
+	paths          []string
 }
 
-func New(noCache bool) *Updater {
+func New(noCache bool, paths []string) *Updater {
 	return &Updater{
 		pypi:           pypi.New(noCache),
 		npm:            npm.New(),
 		filesUpdated:   0,
 		filesUnchanged: 0,
 		modulesUpdated: 0,
+		paths:          paths,
 	}
 }
 
 func (u *Updater) Run() error {
-	return u.ProcessDirectory(".")
+	// If no paths provided, use current directory
+	if len(u.paths) == 0 {
+		return u.ProcessDirectory(".")
+	}
+
+	// Process each provided path
+	for _, path := range u.paths {
+		utils.VerboseLog("Processing path:", path)
+		if err := u.ProcessDirectory(path); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (u *Updater) ProcessDirectory(path string) error {
 	utils.VerboseLog("Starting to process the directory:", path)
 
+	// If path is a file, process just that file
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		utils.VerboseLog("Processing single file:", path)
+		switch {
+		case strings.HasSuffix(path, "requirements.txt") ||
+			strings.Contains(filepath.Base(path), "requirements"):
+			err := u.updateRequirementsFile(path)
+			if err != nil {
+				return err
+			}
+			// Print summary for single file
+			if u.filesUpdated > 0 {
+				fmt.Printf("%d file updated and %d modules updated\n", u.filesUpdated, u.modulesUpdated)
+			} else {
+				fmt.Printf("%d file left unchanged\n", u.filesUnchanged)
+			}
+			return nil
+		case filepath.Base(path) == "package.json":
+			return u.updatePackageJsonFile(path)
+		case filepath.Base(path) == "pyproject.toml":
+			return u.updatePyProjectFile(path)
+		default:
+			return fmt.Errorf("unsupported file type: %s", path)
+		}
+	}
+
+	// Directory processing starts here
+	basePath := path
+	if basePath == "" {
+		basePath = "."
+	}
+
 	// Load .gitignore file
-	ignoreFile := filepath.Join(path, ".gitignore")
+	ignoreFile := filepath.Join(basePath, ".gitignore")
 	var ignorer *ignore.GitIgnore
 	if _, err := os.Stat(ignoreFile); err == nil {
 		ignorer, err = ignore.CompileIgnoreFile(ignoreFile)
@@ -57,7 +104,8 @@ func (u *Updater) ProcessDirectory(path string) error {
 		}
 	}
 
-	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+	foundFiles := 0
+	err := filepath.Walk(basePath, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -82,11 +130,15 @@ func (u *Updater) ProcessDirectory(path string) error {
 		}
 
 		switch {
-		case strings.HasSuffix(filePath, "requirements.txt"):
+		case strings.HasSuffix(filePath, "requirements.txt") ||
+			strings.Contains(filepath.Base(filePath), "requirements"):
+			foundFiles++
 			return u.updateRequirementsFile(filePath)
 		case filepath.Base(filePath) == "package.json":
+			foundFiles++
 			return u.updatePackageJsonFile(filePath)
 		case filepath.Base(filePath) == "pyproject.toml":
+			foundFiles++
 			return u.updatePyProjectFile(filePath)
 		}
 		return nil
@@ -94,6 +146,10 @@ func (u *Updater) ProcessDirectory(path string) error {
 
 	if err != nil {
 		return err
+	}
+
+	if foundFiles == 0 {
+		return fmt.Errorf("no supported files found in %s", path)
 	}
 
 	if u.filesUpdated > 0 {

@@ -117,25 +117,27 @@ func main() {
 	verboseFlag := flag.Bool("verbose", false, "Enable verbose logging")
 	noCacheFlag := flag.Bool("no-cache", false, "Disable caching")
 
-	// Custom flag parsing
-	args := os.Args[1:]
-	command := ""
-	for i, arg := range args {
-		if arg == "update" || arg == "version" || arg == "help" || arg == "clean-cache" || arg == "self-update" || arg == "align" {
-			command = arg
-			args = append(args[:i], args[i+1:]...)
-			break
-		}
-	}
-
-	flag.CommandLine.Parse(args)
+	// Parse flags first
+	flag.Parse()
 
 	// Set verbose mode
 	utils.SetVerbose(*verboseFlag)
 
+	// Get remaining args after flags
+	args := flag.Args()
+
+	// Get command from remaining args
+	command := ""
+	paths := []string{}
+
+	if len(args) > 0 {
+		command = args[0]
+		paths = args[1:] // Everything after command
+	}
+
 	switch command {
 	case "update":
-		updater := update.New(*noCacheFlag)
+		updater := update.New(*noCacheFlag, paths)
 		if err := updater.Run(); err != nil {
 			log.Fatal(err)
 		}
@@ -155,8 +157,8 @@ func main() {
 		if err := aligner.Run(); err != nil {
 			log.Fatal(err)
 		}
-	case "help":
-		fmt.Println("Usage: ru [flags] <command>")
+	case "help", "":
+		fmt.Println("Usage: ru [flags] <command> [args]")
 		fmt.Println("\nCommands:")
 		fmt.Println("  update       Update dependencies in requirements files")
 		fmt.Println("  version      Show version information")

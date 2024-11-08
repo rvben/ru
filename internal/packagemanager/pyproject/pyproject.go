@@ -178,6 +178,15 @@ func LoadAndUpdate(filename string, versions map[string]string) error {
 
 			packageName := strings.Trim(strings.TrimSpace(parts[0]), "\"'")
 			if newVersion, ok := versions[packageName]; ok {
+				currentVersion := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+
+				// Print update information
+				fmt.Printf("%-40s ^%-10s → ^%-10s\n",
+					packageName,
+					currentVersion,
+					newVersion,
+				)
+
 				// Preserve indentation and quotes
 				indent := strings.Repeat(" ", len(line)-len(strings.TrimLeft(line, " ")))
 				quote := ""
