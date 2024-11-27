@@ -131,7 +131,11 @@ func (u *Updater) ProcessDirectory(path string) error {
 
 		switch {
 		case strings.HasSuffix(filePath, "requirements.txt") ||
-			strings.Contains(filepath.Base(filePath), "requirements"):
+			strings.HasSuffix(filepath.Base(filePath), "-requirements.txt") ||
+			strings.HasSuffix(filepath.Base(filePath), "_requirements.txt") ||
+			strings.HasSuffix(filepath.Base(filePath), ".requirements.txt") ||
+			strings.HasPrefix(filepath.Base(filePath), "requirements-") ||
+			strings.HasPrefix(filepath.Base(filePath), "requirements_"):
 			foundFiles++
 			return u.updateRequirementsFile(filePath)
 		case filepath.Base(filePath) == "package.json":
