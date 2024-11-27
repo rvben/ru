@@ -345,7 +345,7 @@ func (p *PyPI) CheckEndpoint() error {
 		Timeout: 10 * time.Second,
 	}
 
-	testURL := p.pypiURL
+	var testURL string
 	if p.isCustomIndexURL {
 		// For custom index URLs, try to access the base URL
 		testURL = p.pypiURL + "/pip"
@@ -356,12 +356,12 @@ func (p *PyPI) CheckEndpoint() error {
 
 	resp, err := client.Get(testURL)
 	if err != nil {
-		return fmt.Errorf("failed to connect to PyPI endpoint (%s): %w", p.pypiURL, err)
+		return fmt.Errorf("failed to connect to PyPI endpoint (tried %s): %w", testURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("PyPI endpoint (%s) returned status code %d", p.pypiURL, resp.StatusCode)
+		return fmt.Errorf("PyPI endpoint (tried %s) returned status code %d", testURL, resp.StatusCode)
 	}
 
 	return nil
