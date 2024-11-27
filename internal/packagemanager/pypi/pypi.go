@@ -348,7 +348,7 @@ func (p *PyPI) CheckEndpoint() error {
 	testURL := p.pypiURL
 	if p.isCustomIndexURL {
 		// For custom index URLs, try to access the base URL
-		testURL = p.pypiURL
+		testURL = p.pypiURL + "/pip"
 	} else {
 		// For PyPI, try to access a known package
 		testURL = p.pypiURL + "/pip/json"
