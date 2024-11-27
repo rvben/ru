@@ -148,9 +148,22 @@ func main() {
 			log.Fatalf("Failed to clean cache: %v", err)
 		}
 		fmt.Println("Cache cleaned successfully")
-	case "self-update":
-		if err := selfUpdate(); err != nil {
-			log.Fatalf("Failed to self-update: %v", err)
+	case "self":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: ru self <command>")
+			fmt.Println("\nCommands:")
+			fmt.Println("  update  Update ru to the latest version")
+			os.Exit(1)
+		}
+
+		switch os.Args[2] {
+		case "update":
+			if err := selfUpdate(); err != nil {
+				log.Fatalf("Failed to self-update: %v", err)
+			}
+		default:
+			fmt.Printf("Unknown self command '%s'. Use 'ru self update' to update ru.\n", os.Args[2])
+			os.Exit(1)
 		}
 	case "align":
 		aligner := update.NewAligner()
@@ -163,7 +176,7 @@ func main() {
 		fmt.Println("  update       Update dependencies in requirements files")
 		fmt.Println("  version      Show version information")
 		fmt.Println("  clean-cache  Clean the version cache")
-		fmt.Println("  self-update  Update ru to the latest version")
+		fmt.Println("  self update  Update ru to the latest version")
 		fmt.Println("  align        Align package versions with existing versions")
 		fmt.Println("  help         Show this help message")
 		fmt.Println("\nFlags:")
