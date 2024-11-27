@@ -44,12 +44,13 @@ func selfUpdate() error {
 		return err
 	}
 
-	if version == latestVersion {
+	currentVersion := strings.TrimPrefix(version, "v")
+	if currentVersion == latestVersion {
 		fmt.Println("ru is already at the latest version", version)
 		return nil
 	}
 
-	fmt.Printf("Updating ru from %s to %s...\n", version, latestVersion)
+	fmt.Printf("Updating ru from %s to %s...\n", currentVersion, latestVersion)
 
 	// Get the binary path
 	execPath, err := os.Executable()
