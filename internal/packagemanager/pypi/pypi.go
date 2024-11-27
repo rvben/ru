@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/html"
 	"gopkg.in/ini.v1"
@@ -336,4 +337,32 @@ func (p *PyPI) selectLatestStableVersion(versions []string) (string, error) {
 	result := candidateVersions[len(candidateVersions)-1]
 	utils.VerboseLog("Selected version:", result)
 	return result, nil
+}
+
+func (p *PyPI) CheckEndpoint() error {
+	// Try to fetch a known package to verify the endpoint is working
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	testURL := p.pypiURL
+	if p.isCustomIndexURL {
+		// For custom index URLs, try to access the base URL
+		testURL = p.pypiURL
+	} else {
+		// For PyPI, try to access a known package
+		testURL = p.pypiURL + "/pip/json"
+	}
+
+	resp, err := client.Get(testURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to PyPI endpoint (%s): %w", p.pypiURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("PyPI endpoint (%s) returned status code %d", p.pypiURL, resp.StatusCode)
+	}
+
+	return nil
 }

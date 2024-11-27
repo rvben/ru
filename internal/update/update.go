@@ -43,6 +43,11 @@ func New(noCache bool, paths []string) *Updater {
 }
 
 func (u *Updater) Run() error {
+	// First check if PyPI endpoint is accessible
+	if err := u.pypi.CheckEndpoint(); err != nil {
+		return fmt.Errorf("PyPI endpoint is not accessible: %w", err)
+	}
+
 	// If no paths provided, use current directory
 	if len(u.paths) == 0 {
 		return u.ProcessDirectory(".")
@@ -190,19 +195,27 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 	}
 	defer file.Close()
 
+	// Read all lines first to avoid writing an empty file if there's an error
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("%s: error reading file: %w", filePath, err)
+	}
+
 	uniqueLines := make(map[string]struct{})
 	var sortedLines []string
 	modulesUpdatedInFile := 0
 
-	scanner := bufio.NewScanner(file)
 	lineNumber := 0
-
 	var g errgroup.Group
 	results := make(chan result)
 
-	for scanner.Scan() {
+	for _, line := range lines {
 		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			if strings.HasPrefix(line, "#") {
 				sortedLines = append(sortedLines, line)
@@ -248,9 +261,12 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		close(results)
 	}()
 
+	// Collect all results before writing the file
+	var updateErr error
 	for res := range results {
 		if res.err != nil {
-			return res.err
+			updateErr = res.err
+			break
 		}
 
 		if res.updatedLine != res.line {
@@ -260,8 +276,9 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		uniqueLines[res.updatedLine] = struct{}{}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("%s:%d: error reading file: %w", filePath, lineNumber, err)
+	// If there was an error, don't modify the file
+	if updateErr != nil {
+		return updateErr
 	}
 
 	for line := range uniqueLines {
