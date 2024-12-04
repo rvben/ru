@@ -230,20 +230,25 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		}
 
 		// Allow dots in the package name
-		re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)([<>=!~]+.*)?`)
+		re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+(?:\[[a-zA-Z0-9-_,]+\])?)([<>=!~]+.*)?`)
 		matches := re.FindStringSubmatch(line)
 		if len(matches) < 2 {
 			return fmt.Errorf("%s:%d: invalid line format: %s", filePath, lineNumber, line)
 		}
 
 		packageName := matches[1]
+		// Extract base package name without extras for version lookup
+		basePackageName := packageName
+		if idx := strings.Index(packageName, "["); idx != -1 {
+			basePackageName = packageName[:idx]
+		}
 		versionConstraints := matches[2]
-		utils.VerboseLog("Processing package:", packageName)
+		utils.VerboseLog("Processing package:", basePackageName, "with extras:", packageName)
 
 		g.Go(func() error {
-			latestVersion, err := u.pypi.GetLatestVersion(packageName)
+			latestVersion, err := u.pypi.GetLatestVersion(basePackageName)
 			if err != nil {
-				return fmt.Errorf("%s:%d: failed to get latest version for package %s: %w", filePath, lineNumber, packageName, err)
+				return fmt.Errorf("%s:%d: failed to get latest version for package %s: %w", filePath, lineNumber, basePackageName, err)
 			}
 
 			updatedLine, err := u.updateLine(line, packageName, versionConstraints, latestVersion)
