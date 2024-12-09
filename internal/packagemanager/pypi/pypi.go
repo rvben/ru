@@ -147,6 +147,11 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 	packageName = strings.ReplaceAll(packageName, "_", "-")
 	packageName = strings.ToLower(packageName)
 
+	// Extract base package name if it has extras
+	if idx := strings.Index(packageName, "["); idx != -1 {
+		packageName = packageName[:idx]
+	}
+
 	url := fmt.Sprintf("%s/%s/", p.pypiURL, packageName)
 
 	utils.VerboseLog("Fetching latest version for package:", packageName, "from URL:", url)
