@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -29,9 +30,10 @@ type Updater struct {
 	filesUnchanged int
 	modulesUpdated int
 	paths          []string
+	verify         bool
 }
 
-func New(noCache bool, paths []string) *Updater {
+func New(noCache bool, verify bool, paths []string) *Updater {
 	return &Updater{
 		pypi:           pypi.New(noCache),
 		npm:            npm.New(),
@@ -39,6 +41,7 @@ func New(noCache bool, paths []string) *Updater {
 		filesUnchanged: 0,
 		modulesUpdated: 0,
 		paths:          paths,
+		verify:         verify,
 	}
 }
 
@@ -293,6 +296,13 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 
 	output := strings.Join(sortedLines, "\n") + "\n"
 
+	if u.verify {
+		// Verify dependencies before writing the file
+		if err := u.verifyRequirements(filePath, output); err != nil {
+			return fmt.Errorf("%s: %w", filePath, err)
+		}
+	}
+
 	err = os.WriteFile(filePath, []byte(output), 0644)
 	if err != nil {
 		return fmt.Errorf("%s:1: error writing updated file: %w", filePath, err)
@@ -517,6 +527,115 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 	// Call the package-level function instead of a method
 	if err := pyproject.LoadAndUpdate(filePath, versions); err != nil {
 		return fmt.Errorf("%s: %w", filePath, err)
+	}
+
+	return nil
+}
+
+func (u *Updater) verifyRequirements(filePath string, updatedContent string) error {
+	utils.VerboseLog("Verifying dependencies for:", filePath)
+
+	// Check if uv is available
+	_, err := exec.LookPath("uv")
+	useUV := err == nil
+	utils.VerboseLog("Using", map[bool]string{true: "uv", false: "pip"}[useUV], "for dependency verification")
+
+	// Create a temporary directory for venv
+	tmpDir, err := os.MkdirTemp("", "ru-verify-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create temporary requirements file
+	tmpReq := filepath.Join(tmpDir, "requirements.txt")
+	if err := os.WriteFile(tmpReq, []byte(updatedContent), 0644); err != nil {
+		return fmt.Errorf("failed to write temporary requirements: %w", err)
+	}
+
+	verifyErr := func() error {
+		if useUV {
+			// Create virtual environment for uv
+			venvPath := filepath.Join(tmpDir, "venv")
+			cmd := exec.Command("python", "-m", "venv", venvPath)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to create virtual environment: %w", err)
+			}
+
+			// Use uv for dependency checking
+			uvCmd := exec.Command(
+				"uv",
+				"pip",
+				"install",
+				"--dry-run",
+				"--no-deps", // First check without dependencies
+				"-r",
+				tmpReq,
+			)
+			uvCmd.Env = append(os.Environ(), fmt.Sprintf("VIRTUAL_ENV=%s", venvPath))
+			uvCmd.Env = append(uvCmd.Env, fmt.Sprintf("PATH=%s:%s", filepath.Join(venvPath, "bin"), os.Getenv("PATH")))
+			if output, err := uvCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("dependency resolution failed.\nDetails:\n%s", output)
+			}
+
+			// Now check with dependencies
+			uvCmd = exec.Command(
+				"uv",
+				"pip",
+				"install",
+				"--dry-run",
+				"-r",
+				tmpReq,
+			)
+			uvCmd.Env = append(os.Environ(), fmt.Sprintf("VIRTUAL_ENV=%s", venvPath))
+			uvCmd.Env = append(uvCmd.Env, fmt.Sprintf("PATH=%s:%s", filepath.Join(venvPath, "bin"), os.Getenv("PATH")))
+			if output, err := uvCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("dependency resolution failed.\nDetails:\n%s", output)
+			}
+		} else {
+			// Create virtual environment
+			cmd := exec.Command("python", "-m", "venv", filepath.Join(tmpDir, "venv"))
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to create virtual environment: %w", err)
+			}
+
+			// Run pip check in dry-run mode
+			pipCmd := exec.Command(
+				filepath.Join(tmpDir, "venv", "bin", "pip"),
+				"install",
+				"--dry-run",
+				"--no-deps", // First check without dependencies
+				"-r",
+				tmpReq,
+			)
+			if output, err := pipCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("dependency resolution failed.\nDetails:\n%s", output)
+			}
+
+			// Now check with dependencies
+			pipCmd = exec.Command(
+				filepath.Join(tmpDir, "venv", "bin", "pip"),
+				"install",
+				"--dry-run",
+				"-r",
+				tmpReq,
+			)
+			if output, err := pipCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("dependency resolution failed.\nDetails:\n%s", output)
+			}
+		}
+		return nil
+	}()
+
+	if verifyErr != nil {
+		// Print a more user-friendly message
+		fmt.Printf("\nWarning: %s may have compatibility issues:\n\n", filePath)
+		fmt.Printf("%s\n\n", verifyErr)
+		fmt.Printf("Options:\n")
+		fmt.Printf("1. Run with --skip-verify to update anyway\n")
+		fmt.Printf("2. Manually review and adjust version constraints\n")
+		fmt.Printf("3. Keep the current versions\n\n")
+		return fmt.Errorf("dependency verification failed for %s", filePath)
 	}
 
 	return nil

@@ -113,34 +113,61 @@ func selfUpdate() error {
 	return nil
 }
 
+func printHelp(globalFlags *flag.FlagSet, updateFlags *flag.FlagSet) {
+	fmt.Println("Usage: ru [global flags] <command> [command flags] [args]")
+	fmt.Println("\nCommands:")
+	fmt.Println("  update       Update dependencies in requirements files")
+	fmt.Println("  version      Show version information")
+	fmt.Println("  clean-cache  Clean the version cache")
+	fmt.Println("  self update  Update ru to the latest version")
+	fmt.Println("  align        Align package versions with existing versions")
+	fmt.Println("  help         Show this help message")
+
+	fmt.Println("\nGlobal flags:")
+	globalFlags.PrintDefaults()
+
+	fmt.Println("\nUpdate command flags:")
+	updateFlags.PrintDefaults()
+}
+
 func main() {
-	// CLI Flags
-	verboseFlag := flag.Bool("verbose", false, "Enable verbose logging")
-	noCacheFlag := flag.Bool("no-cache", false, "Disable caching")
+	// Create a new FlagSet for global flags
+	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
+	verboseFlag := globalFlags.Bool("verbose", false, "Enable verbose logging")
+	noCacheFlag := globalFlags.Bool("no-cache", false, "Disable caching")
 
-	// Parse flags first
-	flag.Parse()
+	// Create a new FlagSet for update command
+	updateFlags := flag.NewFlagSet("update", flag.ExitOnError)
+	verifyFlag := updateFlags.Bool("verify", false, "Verify dependency compatibility (slower)")
 
-	// Set verbose mode
-	utils.SetVerbose(*verboseFlag)
-
-	// Get remaining args after flags
-	args := flag.Args()
-
-	// Get command from remaining args
-	command := ""
-	paths := []string{}
-
-	if len(args) > 0 {
-		command = args[0]
-		paths = args[1:] // Everything after command
+	// Get command from args
+	if len(os.Args) < 2 {
+		printHelp(globalFlags, updateFlags)
+		os.Exit(1)
 	}
+
+	command := os.Args[1]
+
+	// Parse global flags before the command
+	globalFlags.Parse(os.Args[1:])
+
+	// Set verbose mode from global flags
+	utils.SetVerbose(*verboseFlag)
 
 	switch command {
 	case "update":
-		updater := update.New(*noCacheFlag, paths)
-		if err := updater.Run(); err != nil {
+		// Parse update-specific flags
+		if err := updateFlags.Parse(os.Args[2:]); err != nil {
 			log.Fatal(err)
+		}
+		paths := updateFlags.Args()
+
+		updater := update.New(*noCacheFlag, *verifyFlag, paths)
+		if err := updater.Run(); err != nil {
+			if !strings.Contains(err.Error(), "dependency verification failed for") {
+				log.Fatal(err)
+			}
+			os.Exit(1)
 		}
 	case "version":
 		fmt.Printf("ru version %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)

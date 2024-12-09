@@ -33,4 +33,4 @@ run:
 	go run -ldflags "-X main.version=${VERSION}" cmd/ru/main.go update
 
 self-update:
-	go run -ldflags "-X main.version=${VERSION}" cmd/ru/main.go self-update
+	go run -ldflags "-X main.version=${VERSION}" cmd/ru/main.go self update
