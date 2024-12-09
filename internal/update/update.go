@@ -457,6 +457,9 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 		return fmt.Errorf("%s:1: error encoding JSON: %w", filePath, err)
 	}
 
+	// Ensure final newline
+	output = append(output, '\n')
+
 	if err := os.WriteFile(filePath, output, 0644); err != nil {
 		return fmt.Errorf("%s:1: error writing updated file: %w", filePath, err)
 	}
