@@ -56,12 +56,13 @@ func marshalTOML(proj PyProject) ([]byte, error) {
 			builder.WriteString(fmt.Sprintf("requires-python = %q\n", proj.Project.RequiresPython))
 		}
 		if len(proj.Project.Dependencies) > 0 {
-			builder.WriteString("dependencies = [")
+			builder.WriteString("dependencies = [\n")
 			for i, dep := range proj.Project.Dependencies {
-				if i > 0 {
-					builder.WriteString(", ")
+				builder.WriteString(fmt.Sprintf("    %q", dep))
+				if i < len(proj.Project.Dependencies)-1 {
+					builder.WriteString(",")
 				}
-				builder.WriteString(fmt.Sprintf("%q", dep))
+				builder.WriteString("\n")
 			}
 			builder.WriteString("]\n")
 		}
@@ -78,12 +79,13 @@ func marshalTOML(proj PyProject) ([]byte, error) {
 
 		for _, group := range groupKeys {
 			deps := proj.Project.OptionalDependencies[group]
-			builder.WriteString(fmt.Sprintf("%s = [", group))
+			builder.WriteString(fmt.Sprintf("%s = [\n", group))
 			for i, dep := range deps {
-				if i > 0 {
-					builder.WriteString(", ")
+				builder.WriteString(fmt.Sprintf("    %q", dep))
+				if i < len(deps)-1 {
+					builder.WriteString(",")
 				}
-				builder.WriteString(fmt.Sprintf("%q", dep))
+				builder.WriteString("\n")
 			}
 			builder.WriteString("]\n")
 		}
@@ -121,12 +123,13 @@ func marshalTOML(proj PyProject) ([]byte, error) {
 
 		for _, group := range groupKeys {
 			deps := allGroups[group]
-			builder.WriteString(fmt.Sprintf("%s = [", group))
+			builder.WriteString(fmt.Sprintf("%s = [\n", group))
 			for i, dep := range deps {
-				if i > 0 {
-					builder.WriteString(", ")
+				builder.WriteString(fmt.Sprintf("    %q", dep))
+				if i < len(deps)-1 {
+					builder.WriteString(",")
 				}
-				builder.WriteString(fmt.Sprintf("%q", dep))
+				builder.WriteString("\n")
 			}
 			builder.WriteString("]\n")
 		}

@@ -37,11 +37,16 @@ dev = [
 			want: `[project]
 name = "test-project"
 version = "0.1.0"
-dependencies = ["requests==2.31.0", "flask>=2.0.0,<3.0.0", "pytest==7.4.3"]
+dependencies = [
+    "requests==2.31.0",
+    "flask>=2.0.0,<3.0.0",
+    "pytest==7.4.3"
+]
 
 [project.optional-dependencies]
-dev = ["black==23.12.1"]
-`,
+dev = [
+    "black==23.12.1"
+]`,
 		},
 		{
 			name: "Complete PEP 621 format with dependency groups",
@@ -70,11 +75,15 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["aws-cdk-lib==2.165.0", "constructs>=10.0.0,<11.0.0"]
+dependencies = [
+    "aws-cdk-lib==2.165.0",
+    "constructs>=10.0.0,<11.0.0"
+]
 
 [dependency-groups]
-dev = ["pytest==7.4.3"]
-`,
+dev = [
+    "pytest==7.4.3"
+]`,
 		},
 		{
 			name: "Poetry format",
