@@ -57,9 +57,13 @@ func marshalTOML(proj PyProject) ([]byte, error) {
 		}
 		if len(proj.Project.Dependencies) > 0 {
 			builder.WriteString("dependencies = [\n")
-			for i, dep := range proj.Project.Dependencies {
+			// Sort dependencies
+			deps := make([]string, len(proj.Project.Dependencies))
+			copy(deps, proj.Project.Dependencies)
+			sort.Strings(deps)
+			for i, dep := range deps {
 				builder.WriteString(fmt.Sprintf("    %q", dep))
-				if i < len(proj.Project.Dependencies)-1 {
+				if i < len(deps)-1 {
 					builder.WriteString(",")
 				}
 				builder.WriteString("\n")
@@ -80,9 +84,13 @@ func marshalTOML(proj PyProject) ([]byte, error) {
 		for _, group := range groupKeys {
 			deps := proj.Project.OptionalDependencies[group]
 			builder.WriteString(fmt.Sprintf("%s = [\n", group))
-			for i, dep := range deps {
+			// Sort dependencies within the group
+			sortedDeps := make([]string, len(deps))
+			copy(sortedDeps, deps)
+			sort.Strings(sortedDeps)
+			for i, dep := range sortedDeps {
 				builder.WriteString(fmt.Sprintf("    %q", dep))
-				if i < len(deps)-1 {
+				if i < len(sortedDeps)-1 {
 					builder.WriteString(",")
 				}
 				builder.WriteString("\n")
@@ -124,9 +132,13 @@ func marshalTOML(proj PyProject) ([]byte, error) {
 		for _, group := range groupKeys {
 			deps := allGroups[group]
 			builder.WriteString(fmt.Sprintf("%s = [\n", group))
-			for i, dep := range deps {
+			// Sort dependencies within the group
+			sortedDeps := make([]string, len(deps))
+			copy(sortedDeps, deps)
+			sort.Strings(sortedDeps)
+			for i, dep := range sortedDeps {
 				builder.WriteString(fmt.Sprintf("    %q", dep))
-				if i < len(deps)-1 {
+				if i < len(sortedDeps)-1 {
 					builder.WriteString(",")
 				}
 				builder.WriteString("\n")
@@ -140,14 +152,17 @@ func marshalTOML(proj PyProject) ([]byte, error) {
 		builder.WriteString("\n[tool.poetry]\n")
 		if len(proj.Tool.Poetry.Dependencies) > 0 {
 			builder.WriteString("dependencies = { ")
-			orderedDeps := []string{"requests", "flask"}
-			for i, name := range orderedDeps {
-				if version, ok := proj.Tool.Poetry.Dependencies[name]; ok {
-					if i > 0 {
-						builder.WriteString(", ")
-					}
-					builder.WriteString(fmt.Sprintf("%s = %q", name, version))
+			// Sort dependencies
+			keys := make([]string, 0, len(proj.Tool.Poetry.Dependencies))
+			for k := range proj.Tool.Poetry.Dependencies {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for i, k := range keys {
+				if i > 0 {
+					builder.WriteString(", ")
 				}
+				builder.WriteString(fmt.Sprintf("%s = %q", k, proj.Tool.Poetry.Dependencies[k]))
 			}
 			builder.WriteString(" }\n")
 		}

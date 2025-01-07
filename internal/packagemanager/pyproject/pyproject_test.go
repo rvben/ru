@@ -38,9 +38,9 @@ dev = [
 name = "test-project"
 version = "0.1.0"
 dependencies = [
-    "requests==2.31.0",
     "flask>=2.0.0,<3.0.0",
-    "pytest==7.4.3"
+    "pytest==7.4.3",
+    "requests==2.31.0"
 ]
 
 [project.optional-dependencies]
@@ -95,7 +95,7 @@ dev-dependencies = { pytest = "^6.2.5" }`,
 				"pytest":   "7.4.3",
 			},
 			want: `[tool.poetry]
-dependencies = { requests = "^2.31.0", flask = ">=2.0.0,<3.0.0" }
+dependencies = { flask = ">=2.0.0,<3.0.0", requests = "^2.31.0" }
 dev-dependencies = { pytest = "^7.4.3" }
 `,
 		},
