@@ -199,8 +199,11 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 		return fmt.Errorf("failed to parse pyproject.toml: %w", err)
 	}
 
+	// Track if any dependencies were updated
+	hasChanges := false
+
 	// Split the content into lines for manual updating
-	lines := strings.Split(string(content), "\n")
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 	var output []string
 	inDependencies := false
 	inOptionalDependencies := false
@@ -215,7 +218,11 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 	if proj.Project.Dependencies != nil {
 		updatedDeps := make([]string, len(proj.Project.Dependencies))
 		for i, dep := range proj.Project.Dependencies {
-			updatedDeps[i] = updateDependencyString(dep, versions)
+			updatedDep := updateDependencyString(dep, versions)
+			if updatedDep != dep {
+				hasChanges = true
+			}
+			updatedDeps[i] = updatedDep
 		}
 		sort.Strings(updatedDeps)
 		proj.Project.Dependencies = updatedDeps
@@ -227,7 +234,11 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 		for group, deps := range proj.Project.OptionalDependencies {
 			updatedDeps := make([]string, len(deps))
 			for i, dep := range deps {
-				updatedDeps[i] = updateDependencyString(dep, versions)
+				updatedDep := updateDependencyString(dep, versions)
+				if updatedDep != dep {
+					hasChanges = true
+				}
+				updatedDeps[i] = updatedDep
 			}
 			sort.Strings(updatedDeps)
 			optDeps[group] = updatedDeps
@@ -241,7 +252,11 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 		for group, deps := range proj.DependencyGroups {
 			updatedDeps := make([]string, len(deps))
 			for i, dep := range deps {
-				updatedDeps[i] = updateDependencyString(dep, versions)
+				updatedDep := updateDependencyString(dep, versions)
+				if updatedDep != dep {
+					hasChanges = true
+				}
+				updatedDeps[i] = updatedDep
 			}
 			sort.Strings(updatedDeps)
 			depGroups[group] = updatedDeps
@@ -260,6 +275,7 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 		for _, name := range keys {
 			if newVersion, ok := versions[name]; ok {
 				deps[name] = "^" + newVersion
+				hasChanges = true
 			} else {
 				deps[name] = proj.Tool.Poetry.Dependencies[name]
 			}
@@ -277,12 +293,18 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 			for _, name := range keys {
 				if newVersion, ok := versions[name]; ok {
 					devDeps[name] = "^" + newVersion
+					hasChanges = true
 				} else {
 					devDeps[name] = proj.Tool.Poetry.DevDependencies[name]
 				}
 			}
 			proj.Tool.Poetry.DevDependencies = devDeps
 		}
+	}
+
+	// If no changes were made, return early
+	if !hasChanges {
+		return nil
 	}
 
 	// First pass: collect section content
@@ -464,6 +486,11 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 		if !inDependencies && !inOptionalDependencies && !inDependencyGroups && !inPoetryDependencies && !skipUntilNextSection {
 			output = append(output, line)
 		}
+	}
+
+	// Remove trailing empty lines
+	for len(output) > 0 && strings.TrimSpace(output[len(output)-1]) == "" {
+		output = output[:len(output)-1]
 	}
 
 	// Write back to file
