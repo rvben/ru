@@ -251,7 +251,10 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		g.Go(func() error {
 			latestVersion, err := u.pypi.GetLatestVersion(basePackageName)
 			if err != nil {
-				return fmt.Errorf("%s:%d: failed to get latest version for package %s: %w", filePath, lineNumber, basePackageName, err)
+				// Print warning but don't fail
+				fmt.Printf("Warning: Package not found: %s (keeping current version)\n", basePackageName)
+				results <- result{line: line, updatedLine: line, lineNumber: lineNumber, packageName: packageName, versionConstraints: versionConstraints}
+				return nil
 			}
 
 			updatedLine, err := u.updateLine(line, packageName, versionConstraints, latestVersion)
