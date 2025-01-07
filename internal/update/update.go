@@ -13,9 +13,9 @@ import (
 	"sync"
 
 	semv "github.com/Masterminds/semver/v3"
-	"github.com/pelletier/go-toml/v2"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/rvben/ru/internal/packagemanager"
 	"github.com/rvben/ru/internal/packagemanager/npm"
 	"github.com/rvben/ru/internal/packagemanager/pypi"
 	"github.com/rvben/ru/internal/packagemanager/pyproject"
@@ -24,7 +24,7 @@ import (
 )
 
 type Updater struct {
-	pypi           *pypi.PyPI
+	pypi           packagemanager.PackageManager
 	npm            *npm.NPM
 	filesUpdated   int
 	filesUnchanged int
@@ -47,8 +47,8 @@ func New(noCache bool, verify bool, paths []string) *Updater {
 
 func (u *Updater) Run() error {
 	// First check if PyPI endpoint is accessible
-	if err := u.pypi.CheckEndpoint(); err != nil {
-		return fmt.Errorf("PyPI endpoint is not accessible: %w", err)
+	if err := u.pypi.SetCustomIndexURL(); err != nil {
+		return fmt.Errorf("failed to set custom PyPI index: %w", err)
 	}
 
 	// If no paths provided, use current directory
@@ -324,26 +324,28 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 func (u *Updater) updateLine(line, packageName, versionConstraints, latestVersion string) (string, error) {
 	if versionConstraints != "" {
 		if strings.HasPrefix(versionConstraints, "==") {
-			if strings.TrimPrefix(versionConstraints, "==") != latestVersion {
+			currentVersion := strings.TrimPrefix(versionConstraints, "==")
+			if currentVersion != latestVersion {
 				return fmt.Sprintf("%s==%s", packageName, latestVersion), nil
 			}
 			return line, nil
 		}
+
 		ok, err := u.checkVersionConstraints(latestVersion, versionConstraints)
 		if err != nil {
 			return "", err
 		}
-		if ok {
-			utils.VerboseLog("Latest version is within the specified range:", latestVersion)
+		if !ok {
+			// If version doesn't match constraints, keep the original line
+			utils.VerboseLog(fmt.Sprintf("Warning: Latest version %s for package %s is not within the specified range (%s)", latestVersion, packageName, versionConstraints))
 			return line, nil
 		}
-		utils.VerboseLog(fmt.Sprintf("Warning: Latest version %s for package %s is not within the specified range (%s)", latestVersion, packageName, versionConstraints))
+		// If version matches constraints, keep using the constraints
+		utils.VerboseLog("Latest version is within the specified range:", latestVersion)
 		return line, nil
 	}
-	if !strings.HasSuffix(line, "=="+latestVersion) {
-		return fmt.Sprintf("%s==%s", packageName, latestVersion), nil
-	}
-	return line, nil
+	// No version constraints, always update to latest
+	return fmt.Sprintf("%s==%s", packageName, latestVersion), nil
 }
 
 func (u *Updater) checkVersionConstraints(latestVersion, versionConstraints string) (bool, error) {
@@ -355,7 +357,12 @@ func (u *Updater) checkVersionConstraints(latestVersion, versionConstraints stri
 	if strings.HasPrefix(versionConstraints, "~=") {
 		return u.checkCompatibleRelease(v, versionConstraints[2:])
 	} else if strings.HasPrefix(versionConstraints, "==") {
-		return latestVersion == strings.TrimPrefix(versionConstraints, "=="), nil
+		currentVersion := strings.TrimPrefix(versionConstraints, "==")
+		cv, err := semv.NewVersion(currentVersion)
+		if err != nil {
+			return false, fmt.Errorf("error parsing current version: %w", err)
+		}
+		return v.GreaterThan(cv), nil
 	}
 
 	c, err := semv.NewConstraint(versionConstraints)
@@ -493,17 +500,9 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 }
 
 func (u *Updater) updatePyProjectFile(filePath string) error {
-	utils.VerboseLog("Processing pyproject.toml file:", filePath)
-
-	// Read original content to preserve formatting
-	originalContent, err := os.ReadFile(filePath)
+	proj, err := pyproject.LoadProject(filePath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", filePath, err)
-	}
-
-	var proj pyproject.PyProject
-	if err := toml.Unmarshal(originalContent, &proj); err != nil {
-		return fmt.Errorf("%s: failed to parse pyproject.toml: %w", filePath, err)
 	}
 
 	// Collect versions
@@ -539,9 +538,17 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 		return err
 	}
 
-	// Call the package-level function instead of a method
-	if err := pyproject.LoadAndUpdate(filePath, versions); err != nil {
+	// Call the package-level function and handle both return values
+	changed, err := pyproject.LoadAndUpdate(filePath, versions)
+	if err != nil {
 		return fmt.Errorf("%s: %w", filePath, err)
+	}
+
+	if changed {
+		u.filesUpdated++
+		u.modulesUpdated++ // Increment modules updated count
+	} else {
+		u.filesUnchanged++
 	}
 
 	return nil

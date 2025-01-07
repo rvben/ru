@@ -522,3 +522,17 @@ func updateDependencyString(dep string, versions map[string]string) string {
 	}
 	return dep
 }
+
+func LoadProject(filePath string) (*PyProject, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	var proj PyProject
+	if err := toml.Unmarshal(content, &proj); err != nil {
+		return nil, fmt.Errorf("failed to parse pyproject.toml: %w", err)
+	}
+
+	return &proj, nil
+}

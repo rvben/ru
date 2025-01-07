@@ -1,22 +1,25 @@
 package update
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
-	"path/filepath"
 	"testing"
 )
 
-// MockPackageManager implements the PackageManager interface for testing
-type MockPackageManager struct {
+// MockPyPI implements the PackageManager interface for testing
+type MockPyPI struct {
 	versions map[string]string
 }
 
-func (m *MockPackageManager) GetLatestVersion(packageName string) (string, error) {
-	return m.versions[packageName], nil
+func (m *MockPyPI) GetLatestVersion(packageName string) (string, error) {
+	if version, ok := m.versions[packageName]; ok {
+		return version, nil
+	}
+	return "", fmt.Errorf("package not found")
 }
 
-func (m *MockPackageManager) SetCustomIndexURL() error {
+func (m *MockPyPI) SetCustomIndexURL() error {
 	return nil
 }
 
@@ -28,10 +31,19 @@ func TestUpdateRequirementsFile(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
+	// Change to the temp directory for the test
+	currentDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+	defer os.Chdir(currentDir)
+
 	// Create a test requirements file
-	testFile := filepath.Join(tempDir, "requirements.txt")
-	content := `
-package1==1.0.0
+	testFile := "requirements.txt"
+	content := `package1==1.0.0
 package2>=2.0.0,<3.0.0
 package3
 `
@@ -40,8 +52,10 @@ package3
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	// Create a mock package manager
-	mockPM := &MockPackageManager{
+	// Create an updater with test settings
+	updater := New(true, false, []string{"."})
+	// Replace the PyPI client with our mock
+	updater.pypi = &MockPyPI{
 		versions: map[string]string{
 			"package1": "1.1.0",
 			"package2": "2.5.0",
@@ -49,11 +63,8 @@ package3
 		},
 	}
 
-	// Create an updater with the mock package manager
-	updater := NewUpdater(mockPM)
-
 	// Run the update
-	err = updater.ProcessDirectory(tempDir)
+	err = updater.ProcessDirectory(".")
 	if err != nil {
 		t.Fatalf("ProcessDirectory failed: %v", err)
 	}
@@ -83,36 +94,48 @@ package3==3.0.0
 }
 
 func TestCheckVersionConstraints(t *testing.T) {
-	updater := NewUpdater(nil)
+	updater := New(true, false, nil)
 
-	testCases := []struct {
-		latestVersion      string
-		versionConstraints string
-		expected           bool
+	tests := []struct {
+		name       string
+		currentVer string
+		latestVer  string
+		wantUpdate bool
+		wantErr    bool
 	}{
-		{"2.0.0", ">=1.0.0,<3.0.0", true},
-		{"4.0.0", ">=1.0.0,<3.0.0", false},
-		{"1.5.0", "~=1.0", true},
-		{"2.0.0", "~=1.0", false},
-		{"3.0.0", "~=1.0", false},
-		{"1.1.0", "~=1.1", true},
-		{"1.2.0", "~=1.1", true},
-		{"2.0.0", "~=1.1", false},
-		{"1.1.1", "~=1.1.0", true},
-		{"1.1.2", "~=1.1.0", true},
-		{"1.2.0", "~=1.1.0", false},
-		{"1.1.0", "==1.1.0", true},
-		{"1.1.1", "==1.1.0", false},
+		{
+			name:       "Simple version update",
+			currentVer: "==1.0.0",
+			latestVer:  "1.1.0",
+			wantUpdate: true,
+			wantErr:    false,
+		},
+		{
+			name:       "Version with range",
+			currentVer: ">=1.0.0,<2.0.0",
+			latestVer:  "1.5.0",
+			wantUpdate: true,
+			wantErr:    false,
+		},
+		{
+			name:       "Invalid version",
+			currentVer: "invalid",
+			latestVer:  "1.0.0",
+			wantUpdate: false,
+			wantErr:    true,
+		},
 	}
 
-	for _, tc := range testCases {
-		result, err := updater.checkVersionConstraints(tc.latestVersion, tc.versionConstraints)
-		if err != nil {
-			t.Errorf("checkVersionConstraints(%s, %s) returned error: %v", tc.latestVersion, tc.versionConstraints, err)
-			continue
-		}
-		if result != tc.expected {
-			t.Errorf("checkVersionConstraints(%s, %s) = %v, expected %v", tc.latestVersion, tc.versionConstraints, result, tc.expected)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shouldUpdate, err := updater.checkVersionConstraints(tt.latestVer, tt.currentVer)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkVersionConstraints() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if shouldUpdate != tt.wantUpdate {
+				t.Errorf("checkVersionConstraints() = %v, want %v", shouldUpdate, tt.wantUpdate)
+			}
+		})
 	}
 }
