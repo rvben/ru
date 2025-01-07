@@ -465,6 +465,18 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 		u.filesUnchanged++
 	}
 
+	// Sort dependencies alphabetically
+	sortedDeps := make(map[string]interface{})
+	keys := make([]string, 0, len(dependencies))
+	for k := range dependencies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		sortedDeps[k] = dependencies[k]
+	}
+	data["dependencies"] = sortedDeps
+
 	output, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("%s:1: error encoding JSON: %w", filePath, err)
