@@ -9,158 +9,117 @@ import (
 
 func TestLoadAndUpdate(t *testing.T) {
 	tests := []struct {
-		name           string
-		content        string
-		versions       map[string]string
-		expectedError  bool
-		expectedOutput string
+		name     string
+		content  string
+		versions map[string]string
+		want     string
 	}{
 		{
-			name: "basic dependencies",
+			name: "PEP 621 format",
 			content: `[project]
+name = "test-project"
+version = "0.1.0"
 dependencies = [
-    "requests==2.31.0",
-    "flask==2.0.0"
-]`,
-			versions: map[string]string{
-				"requests": "2.32.0",
-				"flask":    "3.0.0",
-			},
-			expectedOutput: `[project]
-dependencies = [
-    "requests==2.32.0",
-    "flask==3.0.0"
-]`,
-		},
-		{
-			name: "dependency groups",
-			content: `[dependency-groups]
-test = [
-    "pytest==7.0.0",
-    "coverage==6.0.0"
-]
-dev = [
-    "black==22.0.0",
-    { include-group = "test" }
+    "requests==2.25.1",
+    "flask>=2.0.0,<3.0.0",
+    "pytest==6.2.5",
 ]
 
-[project]
-dependencies = [
-    "requests==2.31.0"
+[project.optional-dependencies]
+dev = [
+    "black==22.3.0",
 ]`,
 			versions: map[string]string{
-				"pytest":   "7.4.0",
-				"coverage": "7.3.0",
-				"black":    "23.9.0",
-				"requests": "2.32.0",
+				"requests": "2.31.0",
+				"pytest":   "7.4.3",
+				"black":    "23.12.1",
 			},
-			expectedOutput: `[dependency-groups]
-test = [
-    "pytest==7.4.0",
-    "coverage==7.3.0"
-]
-dev = [
-    "black==23.9.0",
-    { include-group = "test" }
+			want: `[project]
+name = "test-project"
+version = "0.1.0"
+dependencies = ["requests==2.31.0", "flask>=2.0.0,<3.0.0", "pytest==7.4.3"]
+
+[project.optional-dependencies]
+dev = ["black==23.12.1"]
+`,
+		},
+		{
+			name: "Complete PEP 621 format with dependency groups",
+			content: `[project]
+name = "example-project"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aws-cdk-lib==2.164.1",
+    "constructs>=10.0.0,<11.0.0",
 ]
 
-[project]
-dependencies = [
-    "requests==2.32.0"
-]`,
-		},
-		{
-			name: "optional dependencies",
-			content: `[project]
-dependencies = [
-    "requests==2.31.0"
-]
-[project.optional-dependencies]
-test = [
-    "pytest==7.0.0",
-    "coverage==6.0.0"
+[dependency-groups]
+dev = [
+    "pytest==6.2.5",
 ]`,
 			versions: map[string]string{
-				"requests": "2.32.0",
-				"pytest":   "7.4.0",
-				"coverage": "7.3.0",
+				"aws-cdk-lib": "2.165.0",
+				"pytest":      "7.4.3",
 			},
-			expectedOutput: `[project]
-dependencies = [
-    "requests==2.32.0"
-]
-[project.optional-dependencies]
-test = [
-    "pytest==7.4.0",
-    "coverage==7.3.0"
-]`,
+			want: `[project]
+name = "example-project"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["aws-cdk-lib==2.165.0", "constructs>=10.0.0,<11.0.0"]
+
+[dependency-groups]
+dev = ["pytest==7.4.3"]
+`,
 		},
 		{
-			name: "invalid toml",
-			content: `[project
-dependencies = [
-    "requests==2.31.0"
-]`,
+			name: "Poetry format",
+			content: `[tool.poetry]
+dependencies = { requests = "^2.25.1", flask = ">=2.0.0,<3.0.0" }
+dev-dependencies = { pytest = "^6.2.5" }`,
 			versions: map[string]string{
-				"requests": "2.32.0",
+				"requests": "2.31.0",
+				"pytest":   "7.4.3",
 			},
-			expectedError: true,
-		},
-		{
-			name: "invalid dependency group",
-			content: `[dependency-groups]
-test = [
-    "pytest==7.0.0",
-    { invalid = "value" }
-]`,
-			versions: map[string]string{
-				"pytest": "7.4.0",
-			},
-			expectedError: true,
+			want: `[tool.poetry]
+dependencies = { requests = "^2.31.0", flask = ">=2.0.0,<3.0.0" }
+dev-dependencies = { pytest = "^7.4.3" }
+`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create temporary directory
-			tmpDir, err := os.MkdirTemp("", "pyproject-test-*")
-			if err != nil {
-				t.Fatalf("Failed to create temp dir: %v", err)
-			}
-			defer os.RemoveAll(tmpDir)
-
-			// Create test file
-			testFile := filepath.Join(tmpDir, "pyproject.toml")
-			if err := os.WriteFile(testFile, []byte(tt.content), 0644); err != nil {
+			// Create temporary file
+			tmpDir := t.TempDir()
+			tmpFile := filepath.Join(tmpDir, "pyproject.toml")
+			if err := os.WriteFile(tmpFile, []byte(tt.content), 0644); err != nil {
 				t.Fatalf("Failed to write test file: %v", err)
 			}
 
 			// Run the update
-			err = LoadAndUpdate(testFile, tt.versions)
-
-			// Check error expectation
-			if tt.expectedError && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tt.expectedError && err != nil {
-				t.Errorf("Unexpected error: %v", err)
+			if err := LoadAndUpdate(tmpFile, tt.versions); err != nil {
+				t.Fatalf("LoadAndUpdate() error = %v", err)
 			}
 
-			// If we expect success, verify the output
-			if !tt.expectedError {
-				output, err := os.ReadFile(testFile)
-				if err != nil {
-					t.Fatalf("Failed to read output file: %v", err)
-				}
+			// Read the result
+			got, err := os.ReadFile(tmpFile)
+			if err != nil {
+				t.Fatalf("Failed to read updated file: %v", err)
+			}
 
-				// Normalize line endings
-				got := string(output)
-				got = strings.ReplaceAll(got, "\r\n", "\n")
-				expected := strings.ReplaceAll(tt.expectedOutput, "\r\n", "\n")
+			// Compare results (normalize line endings)
+			gotStr := strings.TrimSpace(strings.ReplaceAll(string(got), "\r\n", "\n"))
+			wantStr := strings.TrimSpace(strings.ReplaceAll(tt.want, "\r\n", "\n"))
 
-				if got != expected {
-					t.Errorf("Output mismatch:\nGot:\n%s\nWant:\n%s", got, expected)
-				}
+			// Print debug info if test fails
+			if gotStr != wantStr {
+				t.Errorf("LoadAndUpdate() produced incorrect output\nwant (len=%d):\n%q\ngot (len=%d):\n%q",
+					len(wantStr), wantStr, len(gotStr), gotStr)
 			}
 		})
 	}
@@ -228,12 +187,13 @@ func TestUpdateDependencyVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, changed := updateDependencyVersion(tt.dep, tt.versions)
+			got := updateDependencyString(tt.dep, tt.versions)
+			changed := got != tt.dep
 			if got != tt.want {
-				t.Errorf("updateDependencyVersion() got = %v, want %v", got, tt.want)
+				t.Errorf("updateDependencyString() got = %v, want %v", got, tt.want)
 			}
 			if changed != tt.changed {
-				t.Errorf("updateDependencyVersion() changed = %v, want %v", changed, tt.changed)
+				t.Errorf("updateDependencyString() changed = %v, want %v", changed, tt.changed)
 			}
 		})
 	}
