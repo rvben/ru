@@ -193,73 +193,281 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
+	// First, unmarshal into our PyProject struct for dependency handling
 	var proj PyProject
 	if err := toml.Unmarshal(content, &proj); err != nil {
 		return fmt.Errorf("failed to parse pyproject.toml: %w", err)
 	}
 
-	// Update main dependencies while preserving order
-	for i, dep := range proj.Project.Dependencies {
-		proj.Project.Dependencies[i] = updateDependencyString(dep, versions)
+	// Split the content into lines for manual updating
+	lines := strings.Split(string(content), "\n")
+	var output []string
+	inDependencies := false
+	inOptionalDependencies := false
+	inDependencyGroups := false
+	inPoetryDependencies := false
+	skipUntilNextSection := false
+	currentSection := ""
+	seenSections := make(map[string]bool)
+	sectionContent := make(map[string][]string)
+
+	// Update dependencies
+	if proj.Project.Dependencies != nil {
+		updatedDeps := make([]string, len(proj.Project.Dependencies))
+		for i, dep := range proj.Project.Dependencies {
+			updatedDeps[i] = updateDependencyString(dep, versions)
+		}
+		sort.Strings(updatedDeps)
+		proj.Project.Dependencies = updatedDeps
 	}
 
 	// Update optional dependencies
 	if proj.Project.OptionalDependencies != nil {
+		optDeps := make(map[string][]string)
 		for group, deps := range proj.Project.OptionalDependencies {
 			updatedDeps := make([]string, len(deps))
 			for i, dep := range deps {
 				updatedDeps[i] = updateDependencyString(dep, versions)
 			}
-			proj.Project.OptionalDependencies[group] = updatedDeps
+			sort.Strings(updatedDeps)
+			optDeps[group] = updatedDeps
 		}
+		proj.Project.OptionalDependencies = optDeps
 	}
 
-	// Update top-level dependency groups (PEP 735)
+	// Update dependency groups
 	if proj.DependencyGroups != nil {
+		depGroups := make(map[string][]string)
 		for group, deps := range proj.DependencyGroups {
 			updatedDeps := make([]string, len(deps))
 			for i, dep := range deps {
 				updatedDeps[i] = updateDependencyString(dep, versions)
 			}
-			proj.DependencyGroups[group] = updatedDeps
+			sort.Strings(updatedDeps)
+			depGroups[group] = updatedDeps
 		}
+		proj.DependencyGroups = depGroups
 	}
 
-	// Update project-level dependency groups (PEP 735)
-	if proj.Project.DependencyGroups != nil {
-		for group, deps := range proj.Project.DependencyGroups {
-			updatedDeps := make([]string, len(deps))
-			for i, dep := range deps {
-				updatedDeps[i] = updateDependencyString(dep, versions)
-			}
-			proj.Project.DependencyGroups[group] = updatedDeps
-		}
-	}
-
-	// Handle Poetry format while preserving order
-	if len(proj.Tool.Poetry.Dependencies) > 0 {
-		// Update versions while preserving order
+	// Update Poetry dependencies
+	if proj.Tool.Poetry.Dependencies != nil {
+		deps := make(map[string]string)
+		keys := make([]string, 0, len(proj.Tool.Poetry.Dependencies))
 		for name := range proj.Tool.Poetry.Dependencies {
-			if version, ok := versions[name]; ok {
-				proj.Tool.Poetry.Dependencies[name] = "^" + version
+			keys = append(keys, name)
+		}
+		sort.Strings(keys)
+		for _, name := range keys {
+			if newVersion, ok := versions[name]; ok {
+				deps[name] = "^" + newVersion
+			} else {
+				deps[name] = proj.Tool.Poetry.Dependencies[name]
 			}
 		}
+		proj.Tool.Poetry.Dependencies = deps
 
 		// Handle dev dependencies
-		for name := range proj.Tool.Poetry.DevDependencies {
-			if version, ok := versions[name]; ok {
-				proj.Tool.Poetry.DevDependencies[name] = "^" + version
+		if len(proj.Tool.Poetry.DevDependencies) > 0 {
+			devDeps := make(map[string]string)
+			keys := make([]string, 0, len(proj.Tool.Poetry.DevDependencies))
+			for name := range proj.Tool.Poetry.DevDependencies {
+				keys = append(keys, name)
 			}
+			sort.Strings(keys)
+			for _, name := range keys {
+				if newVersion, ok := versions[name]; ok {
+					devDeps[name] = "^" + newVersion
+				} else {
+					devDeps[name] = proj.Tool.Poetry.DevDependencies[name]
+				}
+			}
+			proj.Tool.Poetry.DevDependencies = devDeps
 		}
 	}
 
-	// Marshal back to TOML using our custom marshaler
-	output, err := marshalTOML(proj)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TOML: %w", err)
+	// First pass: collect section content
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmedLine := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmedLine, "[") {
+			currentSection = trimmedLine
+			seenSections[currentSection] = true
+			sectionContent[currentSection] = []string{}
+		} else if currentSection != "" && trimmedLine != "" {
+			sectionContent[currentSection] = append(sectionContent[currentSection], line)
+		}
 	}
 
-	return os.WriteFile(filePath, output, 0644)
+	// Second pass: write output
+	currentSection = ""
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmedLine := strings.TrimSpace(line)
+
+		// Check for section headers
+		if strings.HasPrefix(trimmedLine, "[") {
+			inDependencies = false
+			inOptionalDependencies = false
+			inDependencyGroups = false
+			inPoetryDependencies = false
+			skipUntilNextSection = false
+
+			if trimmedLine == "[project]" {
+				output = append(output, line)
+				currentSection = "project"
+				seenSections[currentSection] = true
+				// Keep non-dependency fields
+				for i++; i < len(lines); i++ {
+					line = lines[i]
+					trimmedLine = strings.TrimSpace(line)
+					if strings.HasPrefix(trimmedLine, "[") {
+						i--
+						break
+					}
+					if !strings.HasPrefix(trimmedLine, "dependencies") && !strings.HasPrefix(trimmedLine, "]") && trimmedLine != "" && !strings.HasPrefix(trimmedLine, "\"") {
+						output = append(output, line)
+					}
+				}
+				// Add updated dependencies
+				if proj.Project.Dependencies != nil {
+					output = append(output, "dependencies = [")
+					for i, dep := range proj.Project.Dependencies {
+						if i < len(proj.Project.Dependencies)-1 {
+							output = append(output, fmt.Sprintf("    %q,", dep))
+						} else {
+							output = append(output, fmt.Sprintf("    %q", dep))
+						}
+					}
+					output = append(output, "]")
+				}
+				output = append(output, "")
+				continue
+			} else if trimmedLine == "[project.optional-dependencies]" {
+				output = append(output, line)
+				currentSection = "project.optional-dependencies"
+				seenSections[currentSection] = true
+				if proj.Project.OptionalDependencies != nil {
+					groups := make([]string, 0, len(proj.Project.OptionalDependencies))
+					for group := range proj.Project.OptionalDependencies {
+						groups = append(groups, group)
+					}
+					sort.Strings(groups)
+					for _, group := range groups {
+						deps := proj.Project.OptionalDependencies[group]
+						output = append(output, fmt.Sprintf("%s = [", group))
+						for i, dep := range deps {
+							if i < len(deps)-1 {
+								output = append(output, fmt.Sprintf("    %q,", dep))
+							} else {
+								output = append(output, fmt.Sprintf("    %q", dep))
+							}
+						}
+						output = append(output, "]")
+					}
+				}
+				skipUntilNextSection = true
+				output = append(output, "")
+				continue
+			} else if trimmedLine == "[dependency-groups]" {
+				output = append(output, line)
+				currentSection = "dependency-groups"
+				seenSections[currentSection] = true
+				if proj.DependencyGroups != nil {
+					groups := make([]string, 0, len(proj.DependencyGroups))
+					for group := range proj.DependencyGroups {
+						groups = append(groups, group)
+					}
+					sort.Strings(groups)
+					for _, group := range groups {
+						deps := proj.DependencyGroups[group]
+						output = append(output, fmt.Sprintf("%s = [", group))
+						for i, dep := range deps {
+							if i < len(deps)-1 {
+								output = append(output, fmt.Sprintf("    %q,", dep))
+							} else {
+								output = append(output, fmt.Sprintf("    %q", dep))
+							}
+						}
+						output = append(output, "]")
+					}
+				}
+				skipUntilNextSection = true
+				output = append(output, "")
+				continue
+			} else if trimmedLine == "[tool.poetry]" {
+				output = append(output, line)
+				currentSection = "tool.poetry"
+				seenSections[currentSection] = true
+				if proj.Tool.Poetry.Dependencies != nil {
+					output = append(output, "dependencies = { ")
+					keys := make([]string, 0, len(proj.Tool.Poetry.Dependencies))
+					for k := range proj.Tool.Poetry.Dependencies {
+						keys = append(keys, k)
+					}
+					sort.Strings(keys)
+					for i, k := range keys {
+						if i > 0 {
+							output[len(output)-1] += ", "
+						}
+						output[len(output)-1] += fmt.Sprintf("%s = %q", k, proj.Tool.Poetry.Dependencies[k])
+					}
+					output[len(output)-1] += " }"
+				}
+				if len(proj.Tool.Poetry.DevDependencies) > 0 {
+					output = append(output, "dev-dependencies = { ")
+					keys := make([]string, 0, len(proj.Tool.Poetry.DevDependencies))
+					for k := range proj.Tool.Poetry.DevDependencies {
+						keys = append(keys, k)
+					}
+					sort.Strings(keys)
+					for i, k := range keys {
+						if i > 0 {
+							output[len(output)-1] += ", "
+						}
+						output[len(output)-1] += fmt.Sprintf("%s = %q", k, proj.Tool.Poetry.DevDependencies[k])
+					}
+					output[len(output)-1] += " }"
+				}
+				skipUntilNextSection = true
+				output = append(output, "")
+				continue
+			} else {
+				if !seenSections[trimmedLine] {
+					output = append(output, line)
+					currentSection = trimmedLine
+					seenSections[currentSection] = true
+					if content, ok := sectionContent[currentSection]; ok {
+						output = append(output, content...)
+					}
+				}
+			}
+		} else if strings.HasPrefix(trimmedLine, "dependencies") {
+			inDependencies = true
+			skipUntilNextSection = true
+			continue
+		} else if strings.HasPrefix(trimmedLine, "optional-dependencies") {
+			inOptionalDependencies = true
+			skipUntilNextSection = true
+			continue
+		} else if strings.HasPrefix(trimmedLine, "dependency-groups") {
+			inDependencyGroups = true
+			skipUntilNextSection = true
+			continue
+		} else if strings.HasPrefix(trimmedLine, "poetry") {
+			inPoetryDependencies = true
+			skipUntilNextSection = true
+			continue
+		}
+
+		// Add non-dependency lines
+		if !inDependencies && !inOptionalDependencies && !inDependencyGroups && !inPoetryDependencies && !skipUntilNextSection {
+			output = append(output, line)
+		}
+	}
+
+	// Write back to file
+	return os.WriteFile(filePath, []byte(strings.Join(output, "\n")+"\n"), 0644)
 }
 
 func updateDependencyString(dep string, versions map[string]string) string {

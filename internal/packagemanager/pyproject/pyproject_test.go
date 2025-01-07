@@ -99,6 +99,133 @@ dependencies = { flask = ">=2.0.0,<3.0.0", requests = "^2.31.0" }
 dev-dependencies = { pytest = "^7.4.3" }
 `,
 		},
+		{
+			name: "Preserve non-dependency sections",
+			content: `[project]
+name = "example-project"
+version = "0.1.0"
+dependencies = [
+    "requests==2.25.1",
+    "flask==2.0.0"
+]
+
+[tool.isort]
+profile = "black"
+
+[tool.pylint.format]
+max-line-length = "120"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+exclude = ["*_test.py", "test_*.py"]
+skips = ["B101","B405","B608"]
+
+[tool.bandit.assert_used]
+exclude = ["*_test.py", "test_*.py"]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.sqlfluff.core]
+sql_file_exts = ".sql"
+max_line_length = 160
+exclude_rules = "RF04"
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = ['.']
+omit = [
+    'cdk.out',
+    '**/.venv/*',
+    'tests/*',
+    '*/test_*.py',
+]
+
+[tool.coverage.report]
+include_namespace_packages = true
+omit = [
+    '**/__init__.py',
+    'cdk.out/*'
+]
+skip_empty = true`,
+			versions: map[string]string{
+				"requests": "2.31.0",
+				"flask":    "2.3.3",
+			},
+			want: `[project]
+name = "example-project"
+version = "0.1.0"
+dependencies = [
+    "flask==2.3.3",
+    "requests==2.31.0"
+]
+
+[tool.isort]
+profile = "black"
+
+[tool.pylint.format]
+max-line-length = "120"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+exclude = ["*_test.py", "test_*.py"]
+skips = ["B101","B405","B608"]
+
+[tool.bandit.assert_used]
+exclude = ["*_test.py", "test_*.py"]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.sqlfluff.core]
+sql_file_exts = ".sql"
+max_line_length = 160
+exclude_rules = "RF04"
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = ['.']
+omit = [
+    'cdk.out',
+    '**/.venv/*',
+    'tests/*',
+    '*/test_*.py',
+]
+
+[tool.coverage.report]
+include_namespace_packages = true
+omit = [
+    '**/__init__.py',
+    'cdk.out/*'
+]
+skip_empty = true`,
+		},
 	}
 
 	for _, tt := range tests {
