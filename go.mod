@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 // indirect
 	github.com/stretchr/testify v1.9.0 // indirect

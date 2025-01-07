@@ -187,16 +187,16 @@ func marshalTOML(proj PyProject) ([]byte, error) {
 	return []byte(builder.String()), nil
 }
 
-func LoadAndUpdate(filePath string, versions map[string]string) error {
+func LoadAndUpdate(filePath string, versions map[string]string) (bool, error) {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+		return false, fmt.Errorf("failed to read file: %w", err)
 	}
 
 	// First, unmarshal into our PyProject struct for dependency handling
 	var proj PyProject
 	if err := toml.Unmarshal(content, &proj); err != nil {
-		return fmt.Errorf("failed to parse pyproject.toml: %w", err)
+		return false, fmt.Errorf("failed to parse pyproject.toml: %w", err)
 	}
 
 	// Track if any dependencies were updated
@@ -304,7 +304,7 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 
 	// If no changes were made, return early
 	if !hasChanges {
-		return nil
+		return false, nil
 	}
 
 	// First pass: collect section content
@@ -494,7 +494,11 @@ func LoadAndUpdate(filePath string, versions map[string]string) error {
 	}
 
 	// Write back to file
-	return os.WriteFile(filePath, []byte(strings.Join(output, "\n")+"\n"), 0644)
+	if err := os.WriteFile(filePath, []byte(strings.Join(output, "\n")+"\n"), 0644); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func updateDependencyString(dep string, versions map[string]string) string {
