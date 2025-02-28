@@ -115,7 +115,7 @@ func selfUpdate() error {
 }
 
 func printHelp(globalFlags *flag.FlagSet, updateFlags *flag.FlagSet) {
-	fmt.Println("Usage: ru [global flags] <command> [command flags] [args]")
+	fmt.Println("Usage: ru <command> [command flags] [args]")
 	fmt.Println("\nCommands:")
 	fmt.Println("  update       Update dependencies in requirements files")
 	fmt.Println("  version      Show version information")
@@ -124,11 +124,19 @@ func printHelp(globalFlags *flag.FlagSet, updateFlags *flag.FlagSet) {
 	fmt.Println("  align        Align package versions with existing versions")
 	fmt.Println("  help         Show this help message")
 
-	fmt.Println("\nGlobal flags:")
+	fmt.Println("\nGlobal flags (available for all commands):")
 	globalFlags.PrintDefaults()
 
-	fmt.Println("\nUpdate command flags:")
+	fmt.Println("\nUpdate command flags (use after 'update' command):")
 	updateFlags.PrintDefaults()
+
+	fmt.Println("\nExamples:")
+	fmt.Println("  ru update                     Update all dependencies")
+	fmt.Println("  ru update -verify             Update with verification")
+	fmt.Println("  ru update -verbose            Update with verbose logging")
+	fmt.Println("  ru update -no-cache           Update without using cache")
+	fmt.Println("  ru update -verbose -verify    Combine multiple flags")
+	fmt.Println("  ru clean-cache -verbose       Use global flags with other commands")
 }
 
 // isTestMode returns true if we're running in test mode
@@ -152,48 +160,63 @@ func getCacheDir() string {
 func main() {
 	// Create a new FlagSet for global flags
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
-	globalFlags.Bool("verbose", false, "Enable verbose logging")
+	verboseFlag := globalFlags.Bool("verbose", false, "Enable verbose logging")
+	// Only declare noCacheFlag if we're going to use it
+	// noCacheFlag := globalFlags.Bool("no-cache", false, "Disable caching")
 	globalFlags.Bool("no-cache", false, "Disable caching")
 
 	// Create a new FlagSet for update command
 	updateFlags := flag.NewFlagSet("update", flag.ExitOnError)
 	verifyFlag := updateFlags.Bool("verify", false, "Verify dependency compatibility (slower)")
+	// Add the global flags to the update command as well
+	updateVerboseFlag := updateFlags.Bool("verbose", false, "Enable verbose logging")
+	updateNoCacheFlag := updateFlags.Bool("no-cache", false, "Disable caching")
 
-	// Define flags for the default command line parser
-	verbose := flag.Bool("verbose", false, "Enable verbose logging")
-	noCache := flag.Bool("no-cache", false, "Disable caching")
-	flag.Parse()
-
-	// Set verbose mode based on the flag value
-	utils.SetVerbose(*verbose)
-
-	// Get command from args
-	args := flag.Args()
-	if len(args) == 0 {
+	// Check if any args were provided
+	if len(os.Args) < 2 {
 		printHelp(globalFlags, updateFlags)
 		os.Exit(1)
 	}
 
-	command := args[0]
-	commandArgs := args[1:]
+	// Get the command
+	command := os.Args[1]
 
 	switch command {
 	case "update":
 		// Parse update-specific flags
-		if err := updateFlags.Parse(commandArgs); err != nil {
+		if err := updateFlags.Parse(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 		paths := updateFlags.Args()
 
 		// Log if running in test mode
-		if isTestMode() {
+		testMode := isTestMode()
+		if testMode {
 			utils.VerboseLog("Running in test mode")
 			if cacheDir := getCacheDir(); cacheDir != "" {
 				utils.VerboseLog("Using cache directory:", cacheDir)
 			}
 		}
 
-		updater := update.New(*noCache, *verifyFlag, paths)
+		// Set verbose mode based on the flag or environment
+		verbose := *updateVerboseFlag
+		if os.Getenv("RU_VERBOSE") == "1" {
+			verbose = true
+		}
+		utils.SetVerbose(verbose)
+
+		// Initialize updater with appropriate settings
+		noCache := *updateNoCacheFlag
+		if os.Getenv("RU_NO_CACHE") == "1" {
+			noCache = true
+		}
+
+		verify := *verifyFlag
+		if os.Getenv("RU_VERIFY") == "1" {
+			verify = true
+		}
+
+		updater := update.New(noCache, verify, paths)
 		if err := updater.Run(); err != nil {
 			if !strings.Contains(err.Error(), "dependency verification failed for") {
 				log.Fatal(err)
@@ -203,28 +226,42 @@ func main() {
 	case "version":
 		fmt.Printf("ru version %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
 	case "clean-cache":
+		if err := globalFlags.Parse(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		utils.SetVerbose(*verboseFlag)
 		if err := cache.Clean(); err != nil {
 			log.Fatalf("Failed to clean cache: %v", err)
 		}
 		fmt.Println("Cache cleaned successfully")
 	case "self":
-		if len(commandArgs) == 0 {
+		if err := globalFlags.Parse(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		utils.SetVerbose(*verboseFlag)
+
+		args := globalFlags.Args()
+		if len(args) == 0 {
 			fmt.Println("Usage: ru self <command>")
 			fmt.Println("\nCommands:")
 			fmt.Println("  update  Update ru to the latest version")
 			os.Exit(1)
 		}
 
-		switch commandArgs[0] {
+		switch args[0] {
 		case "update":
 			if err := selfUpdate(); err != nil {
 				log.Fatalf("Failed to self-update: %v", err)
 			}
 		default:
-			fmt.Printf("Unknown self command '%s'. Use 'ru self update' to update ru.\n", commandArgs[0])
+			fmt.Printf("Unknown self command '%s'. Use 'ru self update' to update ru.\n", args[0])
 			os.Exit(1)
 		}
 	case "align":
+		if err := globalFlags.Parse(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		utils.SetVerbose(*verboseFlag)
 		aligner := update.NewAligner()
 		if err := aligner.Run(); err != nil {
 			log.Fatal(err)

@@ -1,18 +1,13 @@
 # Example requirements.txt with custom index URL
---index-url https://custom-pypi.example.com/simple
-
 # Web framework
-flask==2.0.1
-
 # HTTP client
-requests==2.26.0
-
 # Date and time utility
-pendulum==2.1.2
-
 # Data serialization
-pydantic==1.9.0
-
 # Testing framework
-pytest==7.0.0
+--index-url https://custom-pypi.example.com/simple
+flask==2.0.1
+pendulum==2.1.2
+pydantic==1.9.0
 pytest-cov==2.12.1 
+pytest==7.0.0
+requests==2.26.0

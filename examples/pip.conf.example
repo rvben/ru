@@ -1,0 +1,13 @@
+[global]
+index-url = https://custom-pypi.example.com/simple
+trusted-host = custom-pypi.example.com
+
+# Optional: Add additional index URLs
+# extra-index-url = https://secondary-index.example.com/simple
+
+# Optional: Configure timeouts
+timeout = 60
+default-timeout = 60
+
+# Optional: Set cache directory
+cache-dir = ~/.pip/cache 

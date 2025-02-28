@@ -389,6 +389,14 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 	// Get update order
 	updateOrder := graph.GetUpdateOrder()
 
+	// Filter out the artificial "root" node before processing updates
+	var filteredUpdateOrder []string
+	for _, pkg := range updateOrder {
+		if pkg != "root" {
+			filteredUpdateOrder = append(filteredUpdateOrder, pkg)
+		}
+	}
+
 	// Second pass: fetch latest versions and validate updates
 	var g errgroup.Group
 	results := make(chan struct {
@@ -397,8 +405,8 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		err     error
 	})
 
-	for _, pkg := range updateOrder {
-		pkg := pkg // Capture loop variable
+	for _, packageName := range filteredUpdateOrder {
+		pkg := packageName // Capture loop variable
 		g.Go(func() error {
 			latestVersion, err := u.pypi.GetLatestVersion(pkg)
 			if err != nil {

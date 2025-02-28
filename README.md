@@ -30,13 +30,13 @@ go build -o ru ./cmd/ru
 ru update
 
 # Update with dependency verification (slower)
-ru update --verify
+ru update -verify
 
 # Update with verbose logging
-ru update --verbose
+ru update -verbose
 
 # Update without caching
-ru update --no-cache
+ru update -no-cache
 
 # Show version information
 ru version
