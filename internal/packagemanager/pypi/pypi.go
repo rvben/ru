@@ -2,6 +2,7 @@ package pypi
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,33 +37,16 @@ type PyPI struct {
 	cacheMutex       sync.Mutex
 	cache            *cache.Cache
 	noCache          bool
-	client           *http.Client
+	client           *utils.OptimizerHTTPClient
 }
 
 // New creates a new PyPI package manager
 func New(noCache bool) *PyPI {
-	// Create a transport with connection pooling
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		MaxIdleConnsPerHost:   10,
-	}
-
 	p := &PyPI{
 		pypiURL:      "https://pypi.org/pypi",
 		versionCache: make(map[string]string),
 		noCache:      noCache,
-		client: &http.Client{
-			Transport: transport,
-			Timeout:   30 * time.Second,
-		},
+		client:       utils.NewHTTPClient(),
 	}
 	if !noCache {
 		p.cache = cache.NewCache()
@@ -181,7 +165,10 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 
 	utils.VerboseLog("Fetching latest version for package:", packageName, "from URL:", url)
 
-	resp, err := http.Get(url)
+	// Use optimized HTTP client with retry and circuit breaker
+	resp, err := p.client.GetWithRetry(url, map[string]string{
+		"Accept": "text/html",
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
 	}
@@ -196,37 +183,69 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 
 func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
-	url := fmt.Sprintf("%s/%s/json", p.pypiURL, packageName)
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request for package %s: %w", packageName, err)
+	// Normalize package name - handle potential case sensitivity and character conversions
+	originalName := packageName
+	packageName = strings.ReplaceAll(packageName, ".", "-")
+	packageName = strings.ReplaceAll(packageName, "_", "-")
+	packageName = strings.ToLower(packageName)
+
+	// Extract base package name if it has extras
+	if idx := strings.Index(packageName, "["); idx != -1 {
+		packageName = packageName[:idx]
 	}
-	// Add headers to improve caching
-	req.Header.Add("Accept", "application/json")
-	req.Header.Add("Connection", "keep-alive")
 
-	resp, err := p.client.Do(req)
+	utils.VerboseLog("Looking up package:", originalName, "normalized to:", packageName)
+
+	url := fmt.Sprintf("%s/%s/json", p.pypiURL, packageName)
+	utils.VerboseLog("Making request to URL:", url)
+
+	// Use optimized HTTP client with retry and circuit breaker
+	resp, err := p.client.GetWithRetry(url, map[string]string{
+		"Accept":          "application/json",
+		"Accept-Encoding": "gzip, deflate", // Explicitly request compression
+	})
 	if err != nil {
+		utils.VerboseLog("HTTP request failed:", err)
 		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
 	}
 	defer resp.Body.Close()
 
+	utils.VerboseLog("HTTP response status:", resp.Status)
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("PyPI returned non-OK status: %s", resp.Status)
 	}
 
+	// Handle compressed response if needed
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		utils.VerboseLog("Response is gzip encoded, decompressing")
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("error creating gzip reader: %w", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+
 	// Use buffered reader for efficiency
-	bufferedBody := bufio.NewReaderSize(resp.Body, bufferSize)
+	bufferedBody := bufio.NewReaderSize(reader, bufferSize)
 
 	// Use standard JSON unmarshaling for PyPI as it's more efficient for this structure
 	var data struct {
+		Info struct {
+			Version string `json:"version"`
+		} `json:"info"`
 		Releases map[string]interface{} `json:"releases"`
 	}
 
 	if err := json.NewDecoder(bufferedBody).Decode(&data); err != nil {
+		utils.VerboseLog("JSON parsing error:", err)
 		return "", fmt.Errorf("error parsing JSON for package %s: %w", packageName, err)
 	}
+
+	utils.VerboseLog("Package info version:", data.Info.Version)
+	utils.VerboseLog("Number of releases:", len(data.Releases))
 
 	// Extract versions from the releases map
 	var versions []string
@@ -235,6 +254,11 @@ func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 	}
 
 	if len(versions) == 0 {
+		// If no releases found but we have info version, use that
+		if data.Info.Version != "" {
+			utils.VerboseLog("Using info version as fallback:", data.Info.Version)
+			return data.Info.Version, nil
+		}
 		return "", fmt.Errorf("no versions found")
 	}
 
@@ -507,4 +531,9 @@ func skipValue(dec *json.Decoder) error {
 	}
 
 	return nil
+}
+
+// GetRequestMetrics returns metrics about HTTP requests
+func (p *PyPI) GetRequestMetrics() utils.HTTPClientMetrics {
+	return p.client.GetMetrics()
 }

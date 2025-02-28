@@ -82,6 +82,49 @@ func (u *Updater) Run() error {
 				fmt.Printf("%d files updated with %d packages upgraded\n", u.filesUpdated, u.modulesUpdated)
 			}
 		}
+
+		// Print HTTP metrics if verbose mode is enabled
+		if utils.IsVerbose() {
+			// Initialize metrics
+			var pypiMetrics, npmMetrics utils.HTTPClientMetrics
+
+			// Try to get PyPI metrics using type assertion
+			if pypiWithMetrics, ok := u.pypi.(interface {
+				GetRequestMetrics() utils.HTTPClientMetrics
+			}); ok {
+				pypiMetrics = pypiWithMetrics.GetRequestMetrics()
+			}
+
+			// Get NPM metrics directly
+			if u.npm != nil {
+				npmMetrics = u.npm.GetRequestMetrics()
+			}
+
+			// Calculate total metrics
+			totalRequests := pypiMetrics.RequestCount + npmMetrics.RequestCount
+			totalRetries := pypiMetrics.RetryCount + npmMetrics.RetryCount
+			totalFailures := pypiMetrics.FailureCount + npmMetrics.FailureCount
+			totalSuccesses := pypiMetrics.SuccessCount + npmMetrics.SuccessCount
+			totalCircuitBreaks := pypiMetrics.CircuitBreakerTrips + npmMetrics.CircuitBreakerTrips
+
+			// Only show metrics if there were any requests
+			if totalRequests > 0 {
+				// Calculate average request time
+				var avgTimeMs float64
+				totalTimeNs := pypiMetrics.TotalRequestTime + npmMetrics.TotalRequestTime
+				avgTimeMs = float64(totalTimeNs) / float64(totalRequests) / 1e6 // convert to ms
+
+				fmt.Println("\nHTTP Metrics:")
+				fmt.Printf("  Total Requests: %d (PyPI: %d, NPM: %d)\n",
+					totalRequests, pypiMetrics.RequestCount, npmMetrics.RequestCount)
+				fmt.Printf("  Successful: %d, Failed: %d, Retries: %d\n",
+					totalSuccesses, totalFailures, totalRetries)
+				if totalCircuitBreaks > 0 {
+					fmt.Printf("  Circuit Breaker Trips: %d\n", totalCircuitBreaks)
+				}
+				fmt.Printf("  Average Request Time: %.2f ms\n", avgTimeMs)
+			}
+		}
 	} else {
 		fmt.Println("No updates were made. All packages are already at their latest versions.")
 	}
@@ -796,20 +839,52 @@ func (u *Updater) getLatestVersions(filePath string, versions map[string]string)
 		return fmt.Errorf("failed to read file: %v", err)
 	}
 
-	// Extract package names from the content
-	re := regexp.MustCompile(`"([a-zA-Z0-9-_.]+(?:\[[a-zA-Z0-9-_,]+\])?)==[^"]*"`)
-	matches := re.FindAllStringSubmatch(string(content), -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			pkg := match[1]
-			if version, err := u.pypi.GetLatestVersion(pkg); err == nil {
-				versions[pkg] = version
+	// Simple line-by-line parsing instead of relying on complex regex
+	lines := strings.Split(string(content), "\n")
+	packageCount := 0
+
+	for _, line := range lines {
+		// Skip empty lines and comments
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Skip git+ lines
+		if strings.HasPrefix(line, "git+") {
+			continue
+		}
+
+		// Basic parsing: split on first occurrence of version specifier
+		var packageName string
+		for _, prefix := range []string{"==", ">=", "<=", "!=", "~=", ">", "<", "==="} {
+			if idx := strings.Index(line, prefix); idx > 0 {
+				packageName = strings.TrimSpace(line[:idx])
+				utils.VerboseLog("Found package:", packageName, "with version specifier:", prefix)
+				packageCount++
+				break
+			}
+		}
+
+		if packageName != "" {
+			// Extract base package name without extras
+			basePackageName := packageName
+			if idx := strings.Index(packageName, "["); idx != -1 {
+				basePackageName = packageName[:idx]
+			}
+
+			utils.VerboseLog("Getting latest version for package:", basePackageName)
+			if version, err := u.pypi.GetLatestVersion(basePackageName); err == nil {
+				versions[basePackageName] = version
+				utils.VerboseLog("Found latest version for", basePackageName, ":", version)
 			} else {
-				fmt.Printf("Warning: Package not found: %s (keeping current version)\n", pkg)
+				utils.VerboseLog("Error getting latest version for", basePackageName, ":", err)
+				fmt.Printf("Warning: Package not found: %s (keeping current version)\n", basePackageName)
 			}
 		}
 	}
 
+	utils.VerboseLog("Found", packageCount, "packages in", filePath)
 	return nil
 }
 

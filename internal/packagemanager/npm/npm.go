@@ -5,59 +5,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"time"
+
+	"github.com/rvben/ru/internal/utils"
 )
 
 const (
-	bufferSize         = 4096
-	connectionTimeout  = 30 * time.Second
-	responseTimeout    = 30 * time.Second
-	maxIdleConnections = 10
+	bufferSize = 4096
 )
 
 type NPM struct {
 	registryURL string
-	client      *http.Client
+	client      *utils.OptimizerHTTPClient
 }
 
 func New() *NPM {
-	// Create a transport with connection pooling
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   connectionTimeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		MaxIdleConnsPerHost:   maxIdleConnections,
-	}
-
 	return &NPM{
 		registryURL: "https://registry.npmjs.org",
-		client: &http.Client{
-			Transport: transport,
-			Timeout:   responseTimeout,
-		},
+		client:      utils.NewHTTPClient(),
 	}
 }
 
 func (n *NPM) GetLatestVersion(packageName string) (string, error) {
 	url := fmt.Sprintf("%s/%s/latest", n.registryURL, packageName)
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request for package %s: %w", packageName, err)
-	}
-	// Add headers to improve caching and efficiency
-	req.Header.Add("Accept", "application/json")
-	req.Header.Add("Connection", "keep-alive")
-
-	resp, err := n.client.Do(req)
+	// Use optimized HTTP client with retry and circuit breaker
+	resp, err := n.client.GetWithRetry(url, map[string]string{
+		"Accept": "application/json",
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
 	}
@@ -114,4 +89,9 @@ func extractVersionFromNPMJSON(r io.Reader) (string, error) {
 
 func (n *NPM) SetCustomIndexURL(url string) {
 	n.registryURL = url
+}
+
+// GetRequestMetrics returns metrics about HTTP requests
+func (n *NPM) GetRequestMetrics() utils.HTTPClientMetrics {
+	return n.client.GetMetrics()
 }

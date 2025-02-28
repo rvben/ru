@@ -13,6 +13,11 @@ func SetVerbose(v bool) {
 	verbose = v
 }
 
+// IsVerbose returns whether verbose mode is enabled
+func IsVerbose() bool {
+	return verbose
+}
+
 // VerboseLog prints log messages only if verbose mode is enabled
 func VerboseLog(v ...interface{}) {
 	if verbose {
