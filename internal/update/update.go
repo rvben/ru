@@ -133,40 +133,75 @@ func (u *Updater) Run() error {
 }
 
 func (u *Updater) ProcessDirectory(dir string) error {
-	// Find all requirements files in the directory
+	// Get all relevant files
 	requirementsFiles, packageJSONFiles, pyprojectFiles, err := u.findRequirementsFiles(dir)
 	if err != nil {
 		return err
 	}
 
+	// Log counts
 	utils.VerboseLog("Found", len(requirementsFiles), "requirements files")
 	utils.VerboseLog("Found", len(packageJSONFiles), "package.json files")
 	utils.VerboseLog("Found", len(pyprojectFiles), "pyproject.toml files")
 
-	// Use parallel processing if we have multiple files
-	if len(requirementsFiles)+len(packageJSONFiles)+len(pyprojectFiles) > 1 {
-		return u.processFilesParallel(requirementsFiles, packageJSONFiles, pyprojectFiles)
+	// Process all found files
+	var wg sync.WaitGroup
+	var errorsMu sync.Mutex
+	var errors []error
+
+	// Process the requirements files
+	for _, reqFile := range requirementsFiles {
+		wg.Add(1)
+		go func(filePath string) {
+			defer wg.Done()
+			err := u.updateRequirementsFile(filePath)
+			if err != nil {
+				errorsMu.Lock()
+				errors = append(errors, err)
+				errorsMu.Unlock()
+			}
+		}(reqFile)
 	}
 
-	// Process each requirements file
-	for _, file := range requirementsFiles {
-		if err := u.updateRequirementsFile(file); err != nil {
-			return err
-		}
+	// Process package.json files
+	for _, packageJSONFile := range packageJSONFiles {
+		wg.Add(1)
+		go func(filePath string) {
+			defer wg.Done()
+			err := u.updatePackageJsonFile(filePath)
+			if err != nil {
+				errorsMu.Lock()
+				errors = append(errors, err)
+				errorsMu.Unlock()
+			}
+		}(packageJSONFile)
 	}
 
-	// Process each package.json file
-	for _, file := range packageJSONFiles {
-		if err := u.updatePackageJsonFile(file); err != nil {
-			return err
-		}
+	// Process pyproject.toml files
+	for _, pyprojectFile := range pyprojectFiles {
+		wg.Add(1)
+		go func(filePath string) {
+			defer wg.Done()
+			err := u.processPyProjectFile(filePath)
+			if err != nil {
+				errorsMu.Lock()
+				errors = append(errors, err)
+				errorsMu.Unlock()
+			}
+		}(pyprojectFile)
 	}
 
-	// Process each pyproject.toml file
-	for _, file := range pyprojectFiles {
-		if err := u.updatePyProjectFile(file); err != nil {
-			return err
+	// Wait for all goroutines to finish
+	wg.Wait()
+
+	// Check if there were any errors
+	if len(errors) > 0 {
+		// Combine all error messages
+		var combinedError string
+		for _, err := range errors {
+			combinedError += err.Error() + "\n"
 		}
+		return fmt.Errorf("failed to process some files: %s", combinedError)
 	}
 
 	return nil
@@ -957,4 +992,93 @@ func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, 
 	}
 
 	return requirements, packageJSON, pyproject, nil
+}
+
+// processPyProjectFile processes a pyproject.toml file to update dependencies
+func (u *Updater) processPyProjectFile(filePath string) error {
+	// Create or get the PyProject instance
+	pyproj := pyproject.NewPyProject(filePath)
+
+	// Get packages that need to be updated
+	packageVersionMap := make(map[string]string)
+
+	// Extract packages from the TOML file to get the latest versions
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Use regex to extract package names and current versions
+	// This regex extracts package names from various TOML formats:
+	// 1. "package==1.0.0" in arrays
+	// 2. package = "^1.0.0" in tables
+	re := regexp.MustCompile(`(?m)"([a-zA-Z0-9_.-]+)(?:\[[a-zA-Z0-9_,.-]+\])?(?:==|>=|<=|!=|~=|>|<|===)([^"]+)"`)
+
+	matches := re.FindAllStringSubmatch(string(content), -1)
+	utils.VerboseLog("Found", len(matches), "potential packages in the TOML file")
+
+	// Process all matches
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+
+		pkgName := match[1]
+		// Clean the package name by removing any quotes or extra whitespace
+		pkgName = strings.Trim(pkgName, `"' `)
+
+		if pkgName == "" || pyproj.ShouldIgnorePackage(pkgName) {
+			continue
+		}
+
+		// Use the package manager to get the latest version
+		latestVersion, err := u.pypi.GetLatestVersion(pkgName)
+		if err != nil {
+			utils.VerboseLog("Package not found:", pkgName, "(keeping current version)")
+			continue
+		}
+
+		utils.VerboseLog("Found package", pkgName, "latest version:", latestVersion)
+		packageVersionMap[pkgName] = latestVersion
+	}
+
+	// Also check for Poetry-style dependencies (package = "version")
+	rePoetry := regexp.MustCompile(`(?m)([a-zA-Z0-9_.-]+)\s*=\s*["']([^"']+)["']`)
+	matchesPoetry := rePoetry.FindAllStringSubmatch(string(content), -1)
+
+	for _, match := range matchesPoetry {
+		if len(match) < 3 {
+			continue
+		}
+
+		pkgName := match[1]
+		// Clean the package name by removing any quotes or extra whitespace
+		pkgName = strings.Trim(pkgName, `"' `)
+
+		if pkgName == "" || pyproj.ShouldIgnorePackage(pkgName) {
+			continue
+		}
+
+		// Use the package manager to get the latest version
+		latestVersion, err := u.pypi.GetLatestVersion(pkgName)
+		if err != nil {
+			utils.VerboseLog("Package not found:", pkgName, "(keeping current version)")
+			continue
+		}
+
+		utils.VerboseLog("Found package", pkgName, "latest version:", latestVersion)
+		packageVersionMap[pkgName] = latestVersion
+	}
+
+	// Update the pyproject.toml file with the new versions
+	updatedModules, err := pyproj.LoadAndUpdate(packageVersionMap)
+	if err != nil {
+		return fmt.Errorf("failed to update pyproject.toml: %w", err)
+	}
+
+	// Update statistics
+	u.filesUpdated++
+	u.modulesUpdated += len(updatedModules)
+
+	return nil
 }
