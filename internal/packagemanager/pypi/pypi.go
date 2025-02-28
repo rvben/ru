@@ -1,6 +1,7 @@
 package pypi
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +24,10 @@ import (
 	"github.com/rvben/ru/internal/utils"
 )
 
+// Buffer size for JSON token reader
+const bufferSize = 4096
+
+// PyPI represents a PyPI package manager
 type PyPI struct {
 	pypiURL          string
 	isCustomIndexURL bool
@@ -31,13 +36,33 @@ type PyPI struct {
 	cacheMutex       sync.Mutex
 	cache            *cache.Cache
 	noCache          bool
+	client           *http.Client
 }
 
+// New creates a new PyPI package manager
 func New(noCache bool) *PyPI {
+	// Create a transport with connection pooling
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConnsPerHost:   10,
+	}
+
 	p := &PyPI{
 		pypiURL:      "https://pypi.org/pypi",
 		versionCache: make(map[string]string),
 		noCache:      noCache,
+		client: &http.Client{
+			Transport: transport,
+			Timeout:   30 * time.Second,
+		},
 	}
 	if !noCache {
 		p.cache = cache.NewCache()
@@ -172,7 +197,16 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string) (string, error) {
 func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
 	url := fmt.Sprintf("%s/%s/json", p.pypiURL, packageName)
-	resp, err := http.Get(url)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request for package %s: %w", packageName, err)
+	}
+	// Add headers to improve caching
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("Connection", "keep-alive")
+
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
 	}
@@ -182,17 +216,26 @@ func (p *PyPI) getLatestVersionFromPyPI(packageName string) (string, error) {
 		return "", fmt.Errorf("PyPI returned non-OK status: %s", resp.Status)
 	}
 
+	// Use buffered reader for efficiency
+	bufferedBody := bufio.NewReaderSize(resp.Body, bufferSize)
+
+	// Use standard JSON unmarshaling for PyPI as it's more efficient for this structure
 	var data struct {
 		Releases map[string]interface{} `json:"releases"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", fmt.Errorf("error decoding JSON for package %s: %w", packageName, err)
+
+	if err := json.NewDecoder(bufferedBody).Decode(&data); err != nil {
+		return "", fmt.Errorf("error parsing JSON for package %s: %w", packageName, err)
 	}
 
-	// Extract all version strings
+	// Extract versions from the releases map
 	var versions []string
 	for version := range data.Releases {
 		versions = append(versions, version)
+	}
+
+	if len(versions) == 0 {
+		return "", fmt.Errorf("no versions found")
 	}
 
 	return p.selectLatestStableVersion(versions)
@@ -367,6 +410,100 @@ func (p *PyPI) CheckEndpoint() error {
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("PyPI endpoint (tried %s) returned status code %d", testURL, resp.StatusCode)
+	}
+
+	return nil
+}
+
+// extractVersionsFromPyPIJSON efficiently extracts only the version keys from PyPI JSON response
+// without parsing the entire structure. This method is kept for reference but is less efficient
+// than standard unmarshaling for PyPI's structure.
+func extractVersionsFromPyPIJSON(r io.Reader) ([]string, error) {
+	// Create a buffered reader for efficiency
+	br := bufio.NewReaderSize(r, bufferSize)
+	dec := json.NewDecoder(br)
+
+	// Find the releases object
+	for {
+		t, err := dec.Token()
+		if err == io.EOF {
+			return nil, fmt.Errorf("releases not found")
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		// Found the releases field
+		if t == "releases" {
+			break
+		}
+	}
+
+	// Skip the opening { of releases object
+	_, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	var versions []string
+
+	// Process all keys in the releases object
+	for {
+		t, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+
+		// End of releases object
+		if t == json.Delim('}') {
+			break
+		}
+
+		// Add version key to list
+		if version, ok := t.(string); ok {
+			versions = append(versions, version)
+		}
+
+		// Skip the array associated with this version
+		if err := skipValue(dec); err != nil {
+			return nil, err
+		}
+	}
+
+	return versions, nil
+}
+
+// skipValue skips the next value in the JSON decoder stream
+func skipValue(dec *json.Decoder) error {
+	// Get the first token, which should be the opening delimiter
+	t, err := dec.Token()
+	if err != nil {
+		return err
+	}
+
+	// If it's not a delimiter, nothing to skip
+	if _, ok := t.(json.Delim); !ok {
+		return nil
+	}
+
+	// Keep track of nesting
+	depth := 1
+
+	for depth > 0 {
+		t, err := dec.Token()
+		if err != nil {
+			return err
+		}
+
+		switch tk := t.(type) {
+		case json.Delim:
+			switch tk {
+			case '[', '{':
+				depth++
+			case ']', '}':
+				depth--
+			}
+		}
 	}
 
 	return nil
