@@ -15,12 +15,12 @@ import (
 	semv "github.com/Masterminds/semver/v3"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/rvben/ru/internal/depgraph"
 	"github.com/rvben/ru/internal/packagemanager"
 	"github.com/rvben/ru/internal/packagemanager/npm"
 	"github.com/rvben/ru/internal/packagemanager/pypi"
 	"github.com/rvben/ru/internal/packagemanager/pyproject"
 	"github.com/rvben/ru/internal/utils"
-	ignore "github.com/sabhiram/go-gitignore"
 )
 
 type Updater struct {
@@ -53,132 +53,82 @@ func (u *Updater) Run() error {
 
 	// If no paths provided, use current directory
 	if len(u.paths) == 0 {
-		return u.ProcessDirectory(".")
-	}
-
-	// Process each provided path
-	for _, path := range u.paths {
-		utils.VerboseLog("Processing path:", path)
-		if err := u.ProcessDirectory(path); err != nil {
+		err := u.ProcessDirectory(".")
+		if err != nil {
 			return err
 		}
+	} else {
+		// Process each provided path
+		for _, path := range u.paths {
+			utils.VerboseLog("Processing path:", path)
+			if err := u.ProcessDirectory(path); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Print summary of updates
+	if u.filesUpdated > 0 {
+		if u.filesUpdated == 1 {
+			if u.modulesUpdated == 1 {
+				fmt.Printf("%d file updated with %d package upgraded\n", u.filesUpdated, u.modulesUpdated)
+			} else {
+				fmt.Printf("%d file updated with %d packages upgraded\n", u.filesUpdated, u.modulesUpdated)
+			}
+		} else {
+			if u.modulesUpdated == 1 {
+				fmt.Printf("%d files updated with %d package upgraded\n", u.filesUpdated, u.modulesUpdated)
+			} else {
+				fmt.Printf("%d files updated with %d packages upgraded\n", u.filesUpdated, u.modulesUpdated)
+			}
+		}
+	} else {
+		fmt.Println("No updates were made. All packages are already at their latest versions.")
 	}
 
 	return nil
 }
 
-func (u *Updater) ProcessDirectory(path string) error {
-	utils.VerboseLog("Starting to process the directory:", path)
-
-	// If path is a file, process just that file
-	if info, err := os.Stat(path); err == nil && !info.IsDir() {
-		utils.VerboseLog("Processing single file:", path)
-		switch {
-		case strings.HasSuffix(path, "requirements.txt") ||
-			strings.Contains(filepath.Base(path), "requirements"):
-			err := u.updateRequirementsFile(path)
-			if err != nil {
-				return err
-			}
-			// Print summary for single file
-			if u.filesUpdated > 0 {
-				fmt.Printf("%d file updated and %d modules updated\n", u.filesUpdated, u.modulesUpdated)
-			} else {
-				fmt.Printf("%d file left unchanged\n", u.filesUnchanged)
-			}
-			return nil
-		case filepath.Base(path) == "package.json":
-			return u.updatePackageJsonFile(path)
-		case filepath.Base(path) == "pyproject.toml":
-			return u.updatePyProjectFile(path)
-		default:
-			return fmt.Errorf("unsupported file type: %s", path)
-		}
-	}
-
-	// Directory processing starts here
-	basePath := path
-	if basePath == "" {
-		basePath = "."
-	}
-
-	// Load .gitignore file
-	ignoreFile := filepath.Join(basePath, ".gitignore")
-	var ignorer *ignore.GitIgnore
-	if _, err := os.Stat(ignoreFile); err == nil {
-		ignorer, err = ignore.CompileIgnoreFile(ignoreFile)
-		if err != nil {
-			return fmt.Errorf("error compiling .gitignore file: %w", err)
-		}
-	}
-
-	foundFiles := 0
-	err := filepath.Walk(basePath, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip directories that are in .gitignore
-		if info.IsDir() {
-			if ignorer != nil && ignorer.MatchesPath(filePath) {
-				utils.VerboseLog("Ignoring directory:", filePath)
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Check if the file should be ignored
-		relPath, err := filepath.Rel(".", filePath)
-		if err != nil {
-			return err
-		}
-		if ignorer != nil && ignorer.MatchesPath(relPath) {
-			utils.VerboseLog("Ignoring file:", relPath)
-			return nil
-		}
-
-		switch {
-		case strings.HasSuffix(filePath, "requirements.txt") ||
-			strings.HasSuffix(filepath.Base(filePath), "-requirements.txt") ||
-			strings.HasSuffix(filepath.Base(filePath), "_requirements.txt") ||
-			strings.HasSuffix(filepath.Base(filePath), ".requirements.txt") ||
-			strings.HasPrefix(filepath.Base(filePath), "requirements-") ||
-			strings.HasPrefix(filepath.Base(filePath), "requirements_"):
-			foundFiles++
-			return u.updateRequirementsFile(filePath)
-		case filepath.Base(filePath) == "package.json":
-			foundFiles++
-			return u.updatePackageJsonFile(filePath)
-		case filepath.Base(filePath) == "pyproject.toml":
-			foundFiles++
-			return u.updatePyProjectFile(filePath)
-		}
-		return nil
-	})
-
+func (u *Updater) ProcessDirectory(dir string) error {
+	// Convert dir to absolute path
+	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
-	if foundFiles == 0 {
-		return fmt.Errorf("no supported files found in %s", path)
+	utils.VerboseLog("Processing directory:", absDir)
+
+	// Get all files in the directory
+	files, err := os.ReadDir(absDir)
+	if err != nil {
+		return fmt.Errorf("failed to read directory: %v", err)
 	}
 
-	if u.filesUpdated > 0 {
-		if u.filesUpdated == 1 {
-			fmt.Printf("%d file updated and %d modules updated\n", u.filesUpdated, u.modulesUpdated)
-		} else {
-			fmt.Printf("%d files updated and %d modules updated\n", u.filesUpdated, u.modulesUpdated)
+	for _, file := range files {
+		if file.IsDir() {
+			continue
 		}
-	} else {
-		if u.filesUnchanged == 1 {
-			fmt.Printf("%d file left unchanged\n", u.filesUnchanged)
-		} else {
-			fmt.Printf("%d files left unchanged\n", u.filesUnchanged)
+
+		filePath := filepath.Join(absDir, file.Name())
+		switch {
+		case strings.HasSuffix(file.Name(), ".txt") && strings.Contains(strings.ToLower(file.Name()), "requirements"):
+			utils.VerboseLog("Found requirements file:", filePath)
+			if err := u.updateRequirementsFile(filePath); err != nil {
+				return fmt.Errorf("failed to update requirements file: %v", err)
+			}
+		case file.Name() == "pyproject.toml":
+			utils.VerboseLog("Found pyproject.toml file:", filePath)
+			if err := u.updatePyProjectFile(filePath); err != nil {
+				return fmt.Errorf("failed to update pyproject.toml: %v", err)
+			}
+		case file.Name() == "package.json":
+			utils.VerboseLog("Found package.json file:", filePath)
+			if err := u.updatePackageJsonFile(filePath); err != nil {
+				return fmt.Errorf("failed to update package.json: %v", err)
+			}
 		}
 	}
 
-	utils.VerboseLog("Completed processing.")
 	return nil
 }
 
@@ -192,6 +142,7 @@ type result struct {
 }
 
 func (u *Updater) updateRequirementsFile(filePath string) error {
+	utils.VerboseLog("Updating requirements file:", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("%s:1: error opening file: %w", filePath, err)
@@ -208,21 +159,19 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		return fmt.Errorf("%s: error reading file: %w", filePath, err)
 	}
 
-	uniqueLines := make(map[string]struct{})
-	var sortedLines []string
-	modulesUpdatedInFile := 0
+	// Create dependency graph
+	graph := depgraph.New()
+	packageVersions := make(map[string]string)
+	packageConstraints := make(map[string]string)
+	currentVersions := make(map[string]string)
+	originalLines := make(map[string]string)
 
+	// First pass: collect dependencies and build graph
 	lineNumber := 0
-	var g errgroup.Group
-	results := make(chan result)
-
 	for _, line := range lines {
 		lineNumber++
 		line := strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
-			if strings.HasPrefix(line, "#") {
-				sortedLines = append(sortedLines, line)
-			}
 			continue
 		}
 
@@ -246,23 +195,76 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 			basePackageName = packageName[:idx]
 		}
 		versionConstraints := matches[2]
-		utils.VerboseLog("Processing package:", basePackageName, "with extras:", packageName)
 
+		// Store the original line and constraints
+		originalLines[basePackageName] = line
+		if versionConstraints != "" {
+			packageConstraints[basePackageName] = versionConstraints
+			if strings.HasPrefix(versionConstraints, "==") {
+				currentVersions[basePackageName] = strings.TrimPrefix(versionConstraints, "==")
+			}
+		}
+
+		// Add to graph
+		graph.AddNode(basePackageName, "")
+
+		// Parse dependencies if this is a package with version constraints
+		if versionConstraints != "" {
+			// Add dependency relationship
+			if err := graph.AddDependency("root", basePackageName, versionConstraints); err != nil {
+				return fmt.Errorf("%s:%d: error adding dependency: %w", filePath, lineNumber, err)
+			}
+		}
+	}
+
+	// Detect cycles
+	if cycles := graph.DetectCycles(); len(cycles) > 0 {
+		fmt.Printf("Warning: Circular dependencies detected in %s:\n", filePath)
+		for _, cycle := range cycles {
+			fmt.Printf("  %s\n", strings.Join(cycle, " -> "))
+		}
+	}
+
+	// Get update order
+	updateOrder := graph.GetUpdateOrder()
+
+	// Second pass: fetch latest versions and validate updates
+	var g errgroup.Group
+	results := make(chan struct {
+		name    string
+		version string
+		err     error
+	})
+
+	for _, pkg := range updateOrder {
+		pkg := pkg // Capture loop variable
 		g.Go(func() error {
-			latestVersion, err := u.pypi.GetLatestVersion(basePackageName)
+			latestVersion, err := u.pypi.GetLatestVersion(pkg)
 			if err != nil {
-				// Print warning but don't fail
-				fmt.Printf("Warning: Package not found: %s (keeping current version)\n", basePackageName)
-				results <- result{line: line, updatedLine: line, lineNumber: lineNumber, packageName: packageName, versionConstraints: versionConstraints}
+				results <- struct {
+					name    string
+					version string
+					err     error
+				}{pkg, "", err}
 				return nil
 			}
 
-			updatedLine, err := u.updateLine(line, packageName, versionConstraints, latestVersion)
-			if err != nil {
-				return fmt.Errorf("%s:%d: error updating line: %w", filePath, lineNumber, err)
+			// Validate the update against constraints
+			if err := graph.ValidateUpdate(pkg, latestVersion); err != nil {
+				utils.VerboseLog(fmt.Sprintf("Warning: Skipping update of %s: %v", pkg, err))
+				results <- struct {
+					name    string
+					version string
+					err     error
+				}{pkg, "", nil}
+				return nil
 			}
 
-			results <- result{line: line, updatedLine: updatedLine, lineNumber: lineNumber, packageName: packageName, versionConstraints: versionConstraints}
+			results <- struct {
+				name    string
+				version string
+				err     error
+			}{pkg, latestVersion, nil}
 			return nil
 		})
 	}
@@ -272,42 +274,99 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		close(results)
 	}()
 
-	// Collect all results before writing the file
-	var updateErr error
-	for res := range results {
-		if res.err != nil {
-			updateErr = res.err
-			break
+	// Collect results
+	modulesUpdatedInFile := 0
+	for result := range results {
+		if result.err != nil {
+			// Print warning but don't fail
+			fmt.Printf("Warning: Package not found: %s (keeping current version)\n", result.name)
+			continue
+		}
+		if result.version != "" {
+			packageVersions[result.name] = result.version
+		}
+	}
+
+	// Update the lines with new versions
+	var outputLines []string
+	updatedPackages := make(map[string]bool)
+
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") {
+			outputLines = append(outputLines, line)
+			continue
 		}
 
-		if res.updatedLine != res.line {
-			modulesUpdatedInFile++
+		if strings.HasPrefix(trimmedLine, "git+") {
+			outputLines = append(outputLines, line)
+			continue
 		}
 
-		uniqueLines[res.updatedLine] = struct{}{}
+		re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+(?:\[[a-zA-Z0-9-_,]+\])?)([<>=!~]+.*)?`)
+		matches := re.FindStringSubmatch(trimmedLine)
+		if len(matches) < 2 {
+			outputLines = append(outputLines, line)
+			continue
+		}
+
+		packageName := matches[1]
+		basePackageName := packageName
+		if idx := strings.Index(packageName, "["); idx != -1 {
+			basePackageName = packageName[:idx]
+		}
+
+		if newVersion, ok := packageVersions[basePackageName]; ok {
+			var newLine string
+			if existingConstraint, hasConstraint := packageConstraints[basePackageName]; hasConstraint {
+				// Check if the constraint is a simple equality
+				if strings.HasPrefix(existingConstraint, "==") {
+					newLine = fmt.Sprintf("%s==%s", packageName, newVersion)
+				} else {
+					// Preserve the existing constraint
+					newLine = fmt.Sprintf("%s%s", packageName, existingConstraint)
+				}
+			} else {
+				// No existing constraint, use exact version
+				newLine = fmt.Sprintf("%s==%s", packageName, newVersion)
+			}
+
+			// Check if the line actually changed
+			if newLine != originalLines[basePackageName] {
+				updatedPackages[basePackageName] = true
+			}
+			outputLines = append(outputLines, newLine)
+		} else {
+			outputLines = append(outputLines, line)
+		}
 	}
 
-	// If there was an error, don't modify the file
-	if updateErr != nil {
-		return updateErr
-	}
+	// Count actually updated modules
+	modulesUpdatedInFile = len(updatedPackages)
 
-	for line := range uniqueLines {
-		sortedLines = append(sortedLines, line)
+	// Sort non-comment lines
+	var comments []string
+	var packages []string
+	for _, line := range outputLines {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			comments = append(comments, line)
+		} else if strings.TrimSpace(line) != "" {
+			packages = append(packages, line)
+		}
 	}
-	sort.Strings(sortedLines)
+	sort.Strings(packages)
 
-	output := strings.Join(sortedLines, "\n") + "\n"
+	// Combine comments and sorted packages
+	outputLines = append(comments, packages...)
 
 	if u.verify {
 		// Verify dependencies before writing the file
-		if err := u.verifyRequirements(filePath, output); err != nil {
+		if err := u.verifyRequirements(filePath, strings.Join(outputLines, "\n")+"\n"); err != nil {
 			return fmt.Errorf("%s: %w", filePath, err)
 		}
 	}
 
-	err = os.WriteFile(filePath, []byte(output), 0644)
-	if err != nil {
+	if err := os.WriteFile(filePath, []byte(strings.Join(outputLines, "\n")+"\n"), 0644); err != nil {
 		return fmt.Errorf("%s:1: error writing updated file: %w", filePath, err)
 	}
 
@@ -406,6 +465,7 @@ func (u *Updater) checkCompatibleRelease(v *semv.Version, constraint string) (bo
 }
 
 func (u *Updater) updatePackageJsonFile(filePath string) error {
+	utils.VerboseLog("Updating package.json file:", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("%s:1: error opening file: %w", filePath, err)
@@ -500,53 +560,30 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 }
 
 func (u *Updater) updatePyProjectFile(filePath string) error {
-	proj, err := pyproject.LoadProject(filePath)
+	utils.VerboseLog("Updating pyproject.toml file:", filePath)
+	// Convert to absolute path
+	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		return fmt.Errorf("%s: %w", filePath, err)
+		return fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
-	// Collect versions
+	// Create a new PyProject instance
+	proj := pyproject.NewPyProject(absPath)
+
+	// Get latest versions for dependencies
 	versions := make(map[string]string)
-	var g errgroup.Group
-	var mu sync.Mutex
-
-	for _, dep := range proj.Project.Dependencies {
-		parts := strings.Split(dep, "==")
-		if len(parts) != 2 {
-			continue
-		}
-		packageName := strings.TrimSpace(parts[0])
-
-		if proj.ShouldIgnorePackage(packageName) {
-			continue
-		}
-
-		g.Go(func() error {
-			latestVersion, err := u.pypi.GetLatestVersion(packageName)
-			if err != nil {
-				return fmt.Errorf("failed to get latest version for package %s: %w", packageName, err)
-			}
-
-			mu.Lock()
-			versions[packageName] = latestVersion
-			mu.Unlock()
-			return nil
-		})
+	if err := u.getLatestVersions(filePath, versions); err != nil {
+		return fmt.Errorf("failed to get latest versions: %v", err)
 	}
 
-	if err := g.Wait(); err != nil {
-		return err
-	}
-
-	// Call the package-level function and handle both return values
-	changed, err := pyproject.LoadAndUpdate(filePath, versions)
+	// Update the file
+	updatedModules, err := proj.LoadAndUpdate(versions)
 	if err != nil {
-		return fmt.Errorf("%s: %w", filePath, err)
+		return fmt.Errorf("failed to update pyproject.toml: %v", err)
 	}
 
-	if changed {
+	if len(updatedModules) > 0 {
 		u.filesUpdated++
-		u.modulesUpdated++ // Increment modules updated count
 	} else {
 		u.filesUnchanged++
 	}
@@ -658,6 +695,30 @@ func (u *Updater) verifyRequirements(filePath string, updatedContent string) err
 		fmt.Printf("2. Manually review and adjust version constraints\n")
 		fmt.Printf("3. Keep the current versions\n\n")
 		return fmt.Errorf("dependency verification failed for %s", filePath)
+	}
+
+	return nil
+}
+
+func (u *Updater) getLatestVersions(filePath string, versions map[string]string) error {
+	// Read the file
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %v", err)
+	}
+
+	// Extract package names from the content
+	re := regexp.MustCompile(`"([a-zA-Z0-9-_.]+(?:\[[a-zA-Z0-9-_,]+\])?)==[^"]*"`)
+	matches := re.FindAllStringSubmatch(string(content), -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			pkg := match[1]
+			if version, err := u.pypi.GetLatestVersion(pkg); err == nil {
+				versions[pkg] = version
+			} else {
+				fmt.Printf("Warning: Package not found: %s (keeping current version)\n", pkg)
+			}
+		}
 	}
 
 	return nil

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -130,39 +131,69 @@ func printHelp(globalFlags *flag.FlagSet, updateFlags *flag.FlagSet) {
 	updateFlags.PrintDefaults()
 }
 
+// isTestMode returns true if we're running in test mode
+func isTestMode() bool {
+	return os.Getenv("RU_TEST_MODE") == "1"
+}
+
+// getCacheDir returns the cache directory, which can be overridden in test mode
+func getCacheDir() string {
+	if dir := os.Getenv("RU_CACHE_DIR"); dir != "" {
+		return dir
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
+		return ".ru/cache"
+	}
+	return filepath.Join(homeDir, ".ru", "cache")
+}
+
 func main() {
 	// Create a new FlagSet for global flags
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
-	verboseFlag := globalFlags.Bool("verbose", false, "Enable verbose logging")
-	noCacheFlag := globalFlags.Bool("no-cache", false, "Disable caching")
+	globalFlags.Bool("verbose", false, "Enable verbose logging")
+	globalFlags.Bool("no-cache", false, "Disable caching")
 
 	// Create a new FlagSet for update command
 	updateFlags := flag.NewFlagSet("update", flag.ExitOnError)
 	verifyFlag := updateFlags.Bool("verify", false, "Verify dependency compatibility (slower)")
 
+	// Define flags for the default command line parser
+	verbose := flag.Bool("verbose", false, "Enable verbose logging")
+	noCache := flag.Bool("no-cache", false, "Disable caching")
+	flag.Parse()
+
+	// Set verbose mode based on the flag value
+	utils.SetVerbose(*verbose)
+
 	// Get command from args
-	if len(os.Args) < 2 {
+	args := flag.Args()
+	if len(args) == 0 {
 		printHelp(globalFlags, updateFlags)
 		os.Exit(1)
 	}
 
-	command := os.Args[1]
-
-	// Parse global flags before the command
-	globalFlags.Parse(os.Args[1:])
-
-	// Set verbose mode from global flags
-	utils.SetVerbose(*verboseFlag)
+	command := args[0]
+	commandArgs := args[1:]
 
 	switch command {
 	case "update":
 		// Parse update-specific flags
-		if err := updateFlags.Parse(os.Args[2:]); err != nil {
+		if err := updateFlags.Parse(commandArgs); err != nil {
 			log.Fatal(err)
 		}
 		paths := updateFlags.Args()
 
-		updater := update.New(*noCacheFlag, *verifyFlag, paths)
+		// Log if running in test mode
+		if isTestMode() {
+			utils.VerboseLog("Running in test mode")
+			if cacheDir := getCacheDir(); cacheDir != "" {
+				utils.VerboseLog("Using cache directory:", cacheDir)
+			}
+		}
+
+		updater := update.New(*noCache, *verifyFlag, paths)
 		if err := updater.Run(); err != nil {
 			if !strings.Contains(err.Error(), "dependency verification failed for") {
 				log.Fatal(err)
@@ -177,20 +208,20 @@ func main() {
 		}
 		fmt.Println("Cache cleaned successfully")
 	case "self":
-		if len(os.Args) < 3 {
+		if len(commandArgs) == 0 {
 			fmt.Println("Usage: ru self <command>")
 			fmt.Println("\nCommands:")
 			fmt.Println("  update  Update ru to the latest version")
 			os.Exit(1)
 		}
 
-		switch os.Args[2] {
+		switch commandArgs[0] {
 		case "update":
 			if err := selfUpdate(); err != nil {
 				log.Fatalf("Failed to self-update: %v", err)
 			}
 		default:
-			fmt.Printf("Unknown self command '%s'. Use 'ru self update' to update ru.\n", os.Args[2])
+			fmt.Printf("Unknown self command '%s'. Use 'ru self update' to update ru.\n", commandArgs[0])
 			os.Exit(1)
 		}
 	case "align":
@@ -199,16 +230,7 @@ func main() {
 			log.Fatal(err)
 		}
 	case "help", "":
-		fmt.Println("Usage: ru [flags] <command> [args]")
-		fmt.Println("\nCommands:")
-		fmt.Println("  update       Update dependencies in requirements files")
-		fmt.Println("  version      Show version information")
-		fmt.Println("  clean-cache  Clean the version cache")
-		fmt.Println("  self update  Update ru to the latest version")
-		fmt.Println("  align        Align package versions with existing versions")
-		fmt.Println("  help         Show this help message")
-		fmt.Println("\nFlags:")
-		flag.PrintDefaults()
+		printHelp(globalFlags, updateFlags)
 	default:
 		fmt.Println("Unknown command. Use 'ru help' for usage information.")
 		os.Exit(1)
