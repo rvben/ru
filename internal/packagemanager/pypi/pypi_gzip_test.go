@@ -47,8 +47,8 @@ func TestGetLatestVersionGzipped(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if client accepts gzip encoding
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-			// Check if the request path contains the expected package name
-			if strings.Contains(r.URL.Path, "/example-package/") {
+			// Respond to both standard format and /json format
+			if strings.Contains(r.URL.Path, "/example-package/") || strings.Contains(r.URL.Path, "/example-package/json") {
 				// Compress the response
 				var buf bytes.Buffer
 				gzipWriter := gzip.NewWriter(&buf)
@@ -75,7 +75,7 @@ func TestGetLatestVersionGzipped(t *testing.T) {
 			}
 		} else {
 			// If client doesn't accept gzip, return uncompressed response for test coverage
-			if strings.Contains(r.URL.Path, "/example-package/") {
+			if strings.Contains(r.URL.Path, "/example-package/") || strings.Contains(r.URL.Path, "/example-package/json") {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
 				_, err := io.WriteString(w, jsonResponse)
@@ -97,12 +97,12 @@ func TestGetLatestVersionGzipped(t *testing.T) {
 
 	// Create a PyPI instance with our mock server URL
 	pypi := New(true)
-	pypi.pypiURL = server.URL
+	pypi.verbose = true // Enable verbose logging for debug output
 
-	// Test getting the latest version from a gzipped response
-	version, err := pypi.GetLatestVersion("example-package")
+	// Test getting the latest version directly from the test server
+	version, err := pypi.getLatestVersionFromHTML("example-package", server.URL)
 	if err != nil {
-		t.Fatalf("GetLatestVersion failed with gzipped response: %v", err)
+		t.Fatalf("getLatestVersionFromHTML failed with gzipped response: %v", err)
 	}
 
 	// Verify we got the expected version
@@ -112,31 +112,43 @@ func TestGetLatestVersionGzipped(t *testing.T) {
 	}
 }
 
-// TestGzipDecompressionError tests handling of malformed gzip data
+// TestGzipDecompressionError tests error handling for malformed gzip content
 func TestGzipDecompressionError(t *testing.T) {
 	// Create a mock HTTP server that returns invalid gzipped data
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Return invalid gzip data
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Encoding", "gzip")
-		w.WriteHeader(http.StatusOK)
-		_, err := w.Write([]byte("this is not valid gzip data"))
-		if err != nil {
-			t.Fatalf("Failed to write response: %v", err)
+		// Check if client accepts gzip encoding
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			// Set gzip content encoding header but send invalid gzip data
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Encoding", "gzip")
+			w.WriteHeader(http.StatusOK)
+
+			// Write invalid gzip data (not actually compressed)
+			_, err := w.Write([]byte(`{"info":{"version":"1.0.0"}}`))
+			if err != nil {
+				t.Fatalf("Failed to write response: %v", err)
+			}
+			return
 		}
+
+		// Return 404 for other cases
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
 
 	// Create a PyPI instance with our mock server URL
 	pypi := New(true)
-	pypi.pypiURL = server.URL
+	pypi.verbose = true // Enable verbose logging for debug output
 
-	// Test getting the latest version from invalid gzipped data
-	_, err := pypi.GetLatestVersion("example-package")
+	// Expect an error when trying to decompress invalid gzip data
+	_, err := pypi.getLatestVersionFromHTML("example-package", server.URL)
 	if err == nil {
-		t.Error("Expected an error for invalid gzip data, got nil")
-	} else if !strings.Contains(err.Error(), "gzip") {
-		t.Errorf("Expected error message to contain 'gzip', got: %v", err)
+		t.Fatalf("Expected error when decompressing invalid gzip data, got nil")
+	}
+
+	// The error should be related to gzip decompression
+	if !strings.Contains(err.Error(), "gzip") {
+		t.Errorf("Expected gzip-related error, got: %v", err)
 	}
 }
 
@@ -149,11 +161,13 @@ func TestMixedEncodingResponses(t *testing.T) {
 		contentEncoding     string
 		compressResponse    bool
 		expectedErrContains string
+		expectedVersion     string
 	}{
 		{
 			name:               "Uncompressed response",
 			setContentEncoding: false,
 			compressResponse:   false,
+			expectedVersion:    "2.0.0",
 		},
 		{
 			name:                "Gzip header but uncompressed content",
@@ -163,38 +177,50 @@ func TestMixedEncodingResponses(t *testing.T) {
 			expectedErrContains: "gzip", // Should fail with gzip error
 		},
 		{
-			name:               "Incorrect encoding header",
+			name:               "Properly gzipped content",
 			setContentEncoding: true,
-			contentEncoding:    "deflate", // We only handle gzip
-			compressResponse:   false,
+			contentEncoding:    "gzip",
+			compressResponse:   true,
+			expectedVersion:    "2.0.0",
+		},
+		{
+			name:                "Compressed content but no encoding header",
+			setContentEncoding:  false,
+			compressResponse:    true,
+			expectedErrContains: "invalid", // Should fail with JSON parsing error
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create sample PyPI response JSON
+			// Create sample PyPI response JSON with version info
 			jsonResponse := `{
 				"info": {
 					"name": "example-package",
 					"version": "1.0.0"
 				},
 				"releases": {
-					"1.0.0": []
+					"1.0.0": [],
+					"1.1.0": [],
+					"2.0.0": []
 				}
 			}`
 
 			// Create a mock HTTP server
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Set content type
 				w.Header().Set("Content-Type", "application/json")
 
+				// Set encoding header if specified
 				if tc.setContentEncoding {
 					w.Header().Set("Content-Encoding", tc.contentEncoding)
 				}
 
 				w.WriteHeader(http.StatusOK)
 
+				// Handle compression based on test case
 				if tc.compressResponse {
-					// Compress the response
+					// Compress the response with gzip
 					var buf bytes.Buffer
 					gzipWriter := gzip.NewWriter(&buf)
 					_, err := gzipWriter.Write([]byte(jsonResponse))
@@ -211,7 +237,8 @@ func TestMixedEncodingResponses(t *testing.T) {
 						t.Fatalf("Failed to write response: %v", err)
 					}
 				} else {
-					_, err := io.WriteString(w, jsonResponse)
+					// Send uncompressed response
+					_, err := w.Write([]byte(jsonResponse))
 					if err != nil {
 						t.Fatalf("Failed to write response: %v", err)
 					}
@@ -219,23 +246,26 @@ func TestMixedEncodingResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			// Create a PyPI instance with our mock server URL
+			// Create a PyPI instance
 			pypi := New(true)
-			pypi.pypiURL = server.URL
+			pypi.verbose = true // Enable verbose logging for debug
 
-			// Test getting the latest version
-			_, err := pypi.GetLatestVersion("example-package")
+			// Get the latest version directly using the method we're testing
+			version, err := pypi.getLatestVersionFromHTML("example-package", server.URL)
 
-			// Verify error behavior matches expectations
+			// Check results based on expectations
 			if tc.expectedErrContains != "" {
 				if err == nil {
 					t.Errorf("Expected error containing '%s', got nil", tc.expectedErrContains)
-				} else if !strings.Contains(err.Error(), tc.expectedErrContains) {
+				} else if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.expectedErrContains)) {
 					t.Errorf("Expected error to contain '%s', got: %v", tc.expectedErrContains, err)
 				}
 			} else {
 				if err != nil {
 					t.Errorf("Expected no error, got: %v", err)
+				}
+				if version != tc.expectedVersion {
+					t.Errorf("Expected version %s, got: %s", tc.expectedVersion, version)
 				}
 			}
 		})

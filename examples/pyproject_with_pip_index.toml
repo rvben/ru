@@ -1,0 +1,30 @@
+[project]
+name = "example-project"
+version = "0.1.0"
+description = "An example project with custom PyPI index"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "flask>=2.0.1",
+    "requests>=2.26.0",
+    "pendulum>=2.1.2",
+    "pydantic>=1.9.0",
+]
+requires-python = ">=3.9"
+readme = "README.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=2.12.1",
+    "black>=23.1.0",
+    "isort>=5.12.0",
+]
+
+[tool.pip]
+index-url = "https://custom-pypi.example.com/simple"
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta" 

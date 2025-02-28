@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "example-project"
+version = "0.1.0"
+description = "An example project with custom PyPI index"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+
+[tool.poetry.source]
+name = "custom"
+url = "https://custom-pypi.example.com/simple"
+priority = "primary"  # Makes this the default source
+
+[tool.poetry.dependencies]
+python = "^3.9"
+flask = "^2.0.1"
+requests = "^2.26.0"
+pendulum = "^2.1.2"
+pydantic = "^1.9.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0.0"
+pytest-cov = "^2.12.1"
+black = "^23.1.0"
+isort = "^5.12.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api" 

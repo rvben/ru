@@ -1,156 +1,136 @@
-# ru - Python Dependency Manager
+# RU (Requirements Updater)
 
-`ru` is a tool for managing Python dependencies. It can update your dependencies to their latest versions, align versions across multiple files, and more.
+A tool for updating Python and Node.js package dependencies. RU automatically updates your requirements files to the latest package versions while respecting versioning constraints.
 
-## Quick Start
+## Features
 
-``` bash
-# Install ru
-go install github.com/rvben/ru/cmd/ru@latest
+- Updates Python requirements.txt files
+- Updates Node.js package.json files
+- Updates Poetry pyproject.toml files
+- Supports custom PyPI indexes (multiple ways)
+- Version caching for performance
+- Dependency verification (optional)
+- Self-update functionality
+- Gitignore-aware file processing
 
-# Update all dependencies to latest versions
+## Installation
+
+```bash
+# Install from binary releases
+curl -s https://raw.githubusercontent.com/rvben/ru/main/install.sh | bash
+
+# Or build from source
+go build -o ru ./cmd/ru
+```
+
+## Usage
+
+```bash
+# Update all dependencies in the current directory and subdirectories
 ru update
 
-# Align versions across all files
-ru align
-```
+# Update with dependency verification (slower)
+ru update --verify
 
-## Commands
-
-### `ru update`
-Updates all dependencies to their latest versions in:
-- requirements.txt files
-- pyproject.toml files (PEP 735 compatible)
-- package.json files
-
-``` bash
 # Update with verbose logging
-ru update -verbose
+ru update --verbose
 
-# Update without using cache
-ru update -no-cache
-```
+# Update without caching
+ru update --no-cache
 
-### `ru align`
-Aligns package versions across all files. Uses the highest version found in your codebase for each package.
-
-``` bash
-# Align versions with verbose logging
-ru align -verbose
-```
-
-## Configuration
-
-### Ignoring Updates
-You can prevent specific packages from being updated by adding them to your `pyproject.toml`:
-
-``` toml
-[tool.ru]
-ignore-updates = [
-    "flask",  # Never update flask
-    "requests"  # Never update requests
-]
-```
-
-### Custom Package Index
-`ru` automatically uses your custom PyPI index from `pip.conf`. Supported locations:
-- `~/.config/pip/pip.conf`
-- `/etc/pip.conf`
-
-Example pip.conf:
-``` ini
-[global]
-index-url = https://your-custom-pypi.example.com/simple
-```
-
-### Supported File Types
-- `requirements.txt`: Python requirements files
-- `pyproject.toml`: Python project files (PEP 735 compatible)
-  - Regular dependencies
-  - Optional dependencies
-  - Dependency groups
-- `package.json`: Node.js package files
-
-### .gitignore Support
-`ru` respects your `.gitignore` patterns and won't process files in ignored directories (like `.venv`, `node_modules`, etc.).
-
-## Additional Commands
-
-### `ru self-update`
-Updates ru to the latest version:
-``` bash
-ru self-update
-```
-
-### `ru clean-cache`
-Clears the version cache:
-``` bash
-ru clean-cache
-```
-
-### `ru version`
-Shows the current version:
-``` bash
+# Show version information
 ru version
+
+# Clean the version cache
+ru clean-cache
+
+# Update ru itself to the latest version
+ru self update
 ```
 
-## Flags
+## Custom Package Index Support
 
-- `-verbose`: Enable detailed logging
-- `-no-cache`: Disable caching of package versions
+RU supports custom package indexes from multiple sources with the following precedence:
 
-## Error Handling
+1. **Environment Variables**
+   - `UV_INDEX_URL`: Used by uv package installer
+   - `PIP_INDEX_URL`: Used by pip package installer
+   - `PYTHON_INDEX_URL`: Generic variable
 
-The tool provides clear error messages for common issues:
-- Custom index not reachable
-- Authentication failures
-- Invalid version formats
-- Package not found
+2. **Requirements Files**
+   - Using `--index-url` directive in requirements.txt:
+     ```
+     --index-url https://my-custom-index.example.com
+     flask==2.0.0
+     requests==2.28.0
+     ```
+   - Using `-i` shorthand:
+     ```
+     -i https://my-custom-index.example.com
+     flask==2.0.0
+     requests==2.28.0
+     ```
 
-## Examples
+3. **pyproject.toml Files**
+   - Using UV index configuration:
+     ```toml
+     [[tool.uv.index]]
+     name = "custom"
+     url = "https://my-custom-index.example.com"
+     default = true  # Makes this the default source
+     
+     [[tool.uv.index]]
+     name = "secondary"
+     url = "https://secondary-index.example.com"
+     ```
+   - Using Poetry source configuration:
+     ```toml
+     [tool.poetry.source]
+     name = "custom"
+     url = "https://my-custom-index.example.com"
+     ```
+   - Using pip configuration:
+     ```toml
+     [tool.pip]
+     index-url = "https://my-custom-index.example.com"
+     ```
 
-### Basic Update
-``` bash
-$ ru update
-2 files updated and 5 modules updated
-```
+4. **pip.conf File**
+   - Located at `~/.config/pip/pip.conf`, `~/.pip/pip.conf`, or `/etc/pip.conf`:
+     ```ini
+     [global]
+     index-url = https://my-custom-index.example.com
+     ```
 
-### Version Alignment
-``` bash
-$ ru align
-3 files aligned and 7 modules updated
-```
+RU will automatically detect and use the appropriate custom index URL based on this order of precedence.
 
-### pyproject.toml Example
-``` toml
-[project]
-dependencies = [
-    "requests==2.31.0",
-    "flask==2.0.0"
-]
+## File Patterns Supported
 
-[project.optional-dependencies]
-test = [
-    "pytest==7.0.0",
-    "coverage==6.0.0"
-]
+### Python Requirements Files
+- `requirements.txt`
+- `requirements-*.txt`
+- `requirements_*.txt`
+- `*.requirements.txt`
+- `requirements-dev.txt`
+- `requirements_dev.txt`
 
-[dependency-groups]
-test = [
-    "pytest==7.0.0",
-    "coverage==6.0.0"
-]
-dev = [
-    "black==22.0.0",
-    { include-group = "test" }
-]
+### Node.js Files
+- `package.json`
 
-[tool.ru]
-ignore-updates = [
-    "flask"  # Keep flask at its current version
-]
-```
+### Poetry Files
+- `pyproject.toml`
+
+## Version Handling
+
+- Supports semantic versioning
+- Handles pre-release versions
+- Respects version constraints (==, >=, <=, ~=, etc.)
+- Preserves existing constraints when updating
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-MIT License - see LICENSE file for details
+This project is licensed under the MIT License - see the LICENSE file for details.

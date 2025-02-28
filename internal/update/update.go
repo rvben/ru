@@ -305,6 +305,15 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		return fmt.Errorf("%s: error reading file: %w", filePath, err)
 	}
 
+	// Join all lines to check for index URLs
+	contentStr := strings.Join(lines, "\n")
+
+	// Set custom index URL if specified in the requirements file
+	pypiPkg, ok := u.pypi.(*pypi.PyPI)
+	if ok {
+		pypiPkg.SetIndexURLFromRequirements(contentStr)
+	}
+
 	// Create dependency graph
 	graph := depgraph.New()
 	packageVersions := make(map[string]string)
@@ -318,6 +327,12 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		lineNumber++
 		line := strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Skip index URL lines and other pip options
+		if strings.HasPrefix(line, "--index-url") || strings.HasPrefix(line, "-i ") ||
+			strings.HasPrefix(line, "--") {
 			continue
 		}
 
@@ -734,6 +749,18 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 		return fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
+	// Read file content to check for custom index URL
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return fmt.Errorf("%s: error reading file: %w", filePath, err)
+	}
+
+	// Set custom index URL if specified in the pyproject.toml file
+	pypiPkg, ok := u.pypi.(*pypi.PyPI)
+	if ok {
+		pypiPkg.SetIndexURLFromPyProjectTOML(content)
+	}
+
 	// Create a new PyProject instance
 	proj := pyproject.NewPyProject(absPath)
 
@@ -751,6 +778,7 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 
 	if len(updatedModules) > 0 {
 		u.filesUpdated++
+		u.modulesUpdated += len(updatedModules)
 	} else {
 		u.filesUnchanged++
 	}
@@ -996,17 +1024,23 @@ func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, 
 
 // processPyProjectFile processes a pyproject.toml file to update dependencies
 func (u *Updater) processPyProjectFile(filePath string) error {
+	// Read file content to check for custom index URL
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("%s: error reading file: %w", filePath, err)
+	}
+
+	// Set custom index URL if specified in the pyproject.toml file
+	pypiPkg, ok := u.pypi.(*pypi.PyPI)
+	if ok {
+		pypiPkg.SetIndexURLFromPyProjectTOML(content)
+	}
+
 	// Create or get the PyProject instance
 	pyproj := pyproject.NewPyProject(filePath)
 
 	// Get packages that need to be updated
 	packageVersionMap := make(map[string]string)
-
-	// Extract packages from the TOML file to get the latest versions
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
-	}
 
 	// Use regex to extract package names and current versions
 	// This regex extracts package names from various TOML formats:
