@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/rvben/ru/internal/utils"
 )
 
 const cacheDirName = ".cache/ru"
@@ -102,14 +104,42 @@ func (c *Cache) Set(key, version string) {
 	}
 }
 
-func Clean() error {
+// getCacheDir returns the path to the cache directory
+func getCacheDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
+		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	cacheDir := filepath.Join(homeDir, cacheDirName)
-	if err := os.RemoveAll(cacheDir); err != nil {
-		return fmt.Errorf("failed to remove cache directory: %w", err)
+	return filepath.Join(homeDir, cacheDirName), nil
+}
+
+func Clean() error {
+	// Get the cache directory
+	cacheDir, err := getCacheDir()
+	if err != nil {
+		return fmt.Errorf("failed to get cache directory: %w", err)
 	}
+
+	// Create the cache directory if it doesn't exist
+	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
+		return nil // No cache to clean
+	}
+
+	// Remove all files in the cache directory
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return fmt.Errorf("failed to read cache directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		filePath := filepath.Join(cacheDir, entry.Name())
+		if err := os.Remove(filePath); err != nil {
+			return fmt.Errorf("failed to remove cache file %s: %w", filePath, err)
+		}
+	}
+
+	// Also clear the version cache
+	utils.ClearVersionCache()
+
 	return nil
 }

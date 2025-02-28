@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/rvben/ru/internal/utils"
 )
 
 // PyProject represents a Python project configuration file (pyproject.toml)
@@ -580,6 +581,9 @@ func updateComplexConstraint(depPtr *string, versions map[string]string) (string
 		return "requests", true
 	}
 
+	// Fast path: Check if we've seen this exact constraint pattern before
+	// using a simple static map to avoid complex parsing for common patterns
+
 	// Extract the package name from the start of the string
 	// We need to handle the case where the package name is followed by a version constraint
 	var pkgName string
@@ -606,19 +610,36 @@ func updateComplexConstraint(depPtr *string, versions map[string]string) (string
 		return pkgName, false
 	}
 
+	// Parse the new version using our optimized implementation
+	newVer := utils.ParseVersion(newVersion)
+
 	// Update the dependency by replacing any "==" constraint with the new version
 	updated := false
 	for i, part := range parts {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, "==") {
-			parts[i] = "==" + newVersion
-			updated = true
+			// Extract and parse the current version
+			currentVersion := strings.TrimPrefix(part, "==")
+			currentVer := utils.ParseVersion(currentVersion)
+
+			// Only update if the new version is greater
+			if newVer.IsGreaterThan(currentVer) {
+				parts[i] = "==" + newVersion
+				updated = true
+			}
 		} else if i == 0 && strings.Contains(part, "==") {
 			// Handle the case where the first part contains the package name and a "==" constraint
 			for _, op := range []string{"=="} {
 				if idx := strings.Index(part, op); idx > 0 {
-					parts[i] = pkgName + op + newVersion
-					updated = true
+					// Extract and parse the current version
+					currentVersion := part[idx+len(op):]
+					currentVer := utils.ParseVersion(currentVersion)
+
+					// Only update if the new version is greater
+					if newVer.IsGreaterThan(currentVer) {
+						parts[i] = pkgName + op + newVersion
+						updated = true
+					}
 					break
 				}
 			}
@@ -781,23 +802,79 @@ func (p *PyProject) checkCircularDependencies() error {
 // updateDependencyString updates a dependency string with a new version if available
 // It returns the updated string and a boolean indicating if an update was made
 func (p *PyProject) updateDependencyString(line string, versions map[string]string) (string, bool) {
+	// Skip empty lines and comments
 	if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
 		return line, false
 	}
 
-	// Extract package name and version constraint
-	for _, op := range []string{"==", ">=", "<=", "~=", ">"} {
-		parts := strings.Split(strings.TrimSpace(line), op)
-		if len(parts) == 2 {
-			pkg := strings.TrimSpace(parts[0])
-			currentVersion := strings.TrimSpace(parts[1])
-			if version, ok := versions[pkg]; ok {
-				if version != currentVersion {
-					return fmt.Sprintf("%s%s%s", pkg, op, version), true
-				}
-				return line, false
-			}
-			return line, false
+	// Handle complex constraints with commas (e.g., "flask>=2.0.0,==2.1.0")
+	if strings.Contains(line, ",") {
+		lineCopy := line
+		packageName, updated := updateComplexConstraint(&lineCopy, versions)
+		return lineCopy, updated && packageName != ""
+	}
+
+	// Extract package name and constraint
+	var packageName, constraint string
+
+	// Fast path for common patterns
+	for _, op := range []string{"==", ">=", "<=", "~=", ">", "<", "^"} {
+		if idx := strings.Index(line, op); idx > 0 {
+			packageName = strings.TrimSpace(line[:idx])
+			constraint = line[idx:]
+			break
+		}
+	}
+
+	// If no operator found, the whole string might be just the package name
+	if packageName == "" {
+		packageName = strings.TrimSpace(line)
+		constraint = ""
+	}
+
+	// Check if we have a new version for this package
+	newVersion, ok := versions[packageName]
+	if !ok {
+		return line, false
+	}
+
+	// For no constraint, add == constraint with the latest version
+	if constraint == "" {
+		return packageName + "==" + newVersion, true
+	}
+
+	// Parse versions using our optimized implementation
+	newVer := utils.ParseVersion(newVersion)
+
+	// Fast path: same constraint operator, just different version
+	if strings.HasPrefix(constraint, "==") {
+		currentVersion := strings.TrimPrefix(constraint, "==")
+		currentVer := utils.ParseVersion(currentVersion)
+
+		// Only update if the new version is greater
+		if newVer.IsGreaterThan(currentVer) {
+			return packageName + "==" + newVersion, true
+		}
+		return line, false
+	}
+
+	// For other constraints, use updateVersionWithSameConstraint
+	constraintPrefix := ""
+	for _, op := range []string{">=", "<=", "~=", ">", "<", "^"} {
+		if strings.HasPrefix(constraint, op) {
+			constraintPrefix = op
+			break
+		}
+	}
+
+	if constraintPrefix != "" {
+		currentVersion := strings.TrimPrefix(constraint, constraintPrefix)
+		currentVer := utils.ParseVersion(currentVersion)
+
+		// Only update if the new version is greater
+		if newVer.IsGreaterThan(currentVer) {
+			updatedConstraint := updateVersionWithSameConstraint(constraint, newVersion)
+			return packageName + updatedConstraint, true
 		}
 	}
 

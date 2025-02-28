@@ -1,28 +1,34 @@
 package update
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rvben/ru/internal/packagemanager"
 )
 
-// MockPyPI implements the PackageManager interface for testing
-type MockPyPI struct {
-	versions map[string]string
+// MockPackageManager is a mock implementation of the PackageManager interface for testing
+type MockPackageManager struct {
+	getLatestVersionFunc func(packageName string) (string, error)
 }
 
-func (m *MockPyPI) GetLatestVersion(pkg string) (string, error) {
-	if version, ok := m.versions[pkg]; ok {
-		return version, nil
+func (m *MockPackageManager) GetLatestVersion(packageName string) (string, error) {
+	if m.getLatestVersionFunc != nil {
+		return m.getLatestVersionFunc(packageName)
 	}
-	return "", fmt.Errorf("package %s not found", pkg)
+	return "9.9.9", nil
 }
 
-func (m *MockPyPI) SetCustomIndexURL() error {
+func (m *MockPackageManager) SetCustomIndexURL() error {
 	return nil
 }
 
@@ -67,11 +73,18 @@ package3
 	// Create an updater with test settings
 	updater := New(true, false, []string{"."})
 	// Replace the PyPI client with our mock
-	updater.pypi = &MockPyPI{
-		versions: map[string]string{
-			"package1": "1.1.0",
-			"package2": "2.5.0",
-			"package3": "3.0.0",
+	updater.pypi = &MockPackageManager{
+		getLatestVersionFunc: func(pkg string) (string, error) {
+			if pkg == "package1" {
+				return "1.1.0", nil
+			}
+			if pkg == "package2" {
+				return "2.5.0", nil
+			}
+			if pkg == "package3" {
+				return "3.0.0", nil
+			}
+			return "", fmt.Errorf("package %s not found", pkg)
 		},
 	}
 
@@ -230,7 +243,14 @@ dependencies = { requests = "^2.31.0" }`,
 			}
 
 			// Create an updater with mock PyPI
-			mockPyPI := &MockPyPI{versions: tt.versions}
+			mockPyPI := &MockPackageManager{
+				getLatestVersionFunc: func(pkg string) (string, error) {
+					if version, ok := tt.versions[pkg]; ok {
+						return version, nil
+					}
+					return "", fmt.Errorf("package %s not found", pkg)
+				},
+			}
 			updater := NewUpdater(mockPyPI)
 
 			// Process the directory
@@ -257,3 +277,211 @@ dependencies = { requests = "^2.31.0" }`,
 		})
 	}
 }
+
+// TestParallelProcessing tests that the parallel processing of files works correctly
+func TestParallelProcessing(t *testing.T) {
+	// Create a temporary directory for test files
+	tempDir, err := os.MkdirTemp("", "ru-test-parallel")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create test files
+	numRequirementsFiles := 5
+	numPackageJSONFiles := 3
+	numPyprojectFiles := 2
+
+	// Create requirements files
+	for i := 0; i < numRequirementsFiles; i++ {
+		filename := filepath.Join(tempDir, fmt.Sprintf("requirements-%d.txt", i))
+		content := "package1==1.0.0\npackage2>=2.0.0\npackage3~=3.0.0\n"
+		if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test file: %v", err)
+		}
+	}
+
+	// Create package.json files
+	for i := 0; i < numPackageJSONFiles; i++ {
+		dirPath := filepath.Join(tempDir, fmt.Sprintf("node-project-%d", i))
+		if err := os.Mkdir(dirPath, 0755); err != nil {
+			t.Fatalf("Failed to create test directory: %v", err)
+		}
+
+		filename := filepath.Join(dirPath, "package.json")
+		content := `{
+  "name": "test-project",
+  "version": "1.0.0",
+  "dependencies": {
+    "package1": "^1.0.0",
+    "package2": "~2.0.0"
+  },
+  "devDependencies": {
+    "package3": "3.0.0"
+  }
+}`
+		if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test file: %v", err)
+		}
+	}
+
+	// Create pyproject.toml files
+	for i := 0; i < numPyprojectFiles; i++ {
+		dirPath := filepath.Join(tempDir, fmt.Sprintf("poetry-project-%d", i))
+		if err := os.Mkdir(dirPath, 0755); err != nil {
+			t.Fatalf("Failed to create test directory: %v", err)
+		}
+
+		filename := filepath.Join(dirPath, "pyproject.toml")
+		content := `[tool.poetry]
+name = "test-project"
+version = "1.0.0"
+description = "Test project"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+package1 = "^1.0.0"
+package2 = "~2.0.0"
+
+[tool.poetry.dev-dependencies]
+package3 = "3.0.0"
+`
+		if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write test file: %v", err)
+		}
+	}
+
+	// Create a mock package manager that tracks which files are processed
+	var processedCount int32
+
+	// Mock the PyPI package manager
+	mockPyPI := &MockPackageManager{
+		getLatestVersionFunc: func(pkg string) (string, error) {
+			atomic.AddInt32(&processedCount, 1)
+			// Add a small delay to simulate network requests and ensure concurrency
+			time.Sleep(50 * time.Millisecond)
+			return "9.9.9", nil
+		},
+	}
+
+	// Create the updater
+	updater := New(false, false, []string{tempDir})
+
+	// Replace the PyPI package manager with our mock
+	updater.pypi = mockPyPI
+
+	// Replace the NPM client with a custom implementation that counts requests
+	// We need to create a custom HTTP client to intercept requests
+	origTransport := http.DefaultTransport
+	defer func() { http.DefaultTransport = origTransport }()
+
+	http.DefaultTransport = &countingTransport{
+		RoundTripper: origTransport,
+		counter:      &processedCount,
+	}
+
+	// Measure time taken for parallel processing
+	startTime := time.Now()
+	err = updater.ProcessDirectory(tempDir)
+	duration := time.Since(startTime)
+
+	if err != nil {
+		t.Fatalf("ProcessDirectory failed: %v", err)
+	}
+
+	// Calculate the expected number of packages that would be processed
+	// Each requirements file has 3 packages, each package.json has 3 packages,
+	// and each pyproject.toml has 3 packages
+	expectedPackages := numRequirementsFiles*3 + numPackageJSONFiles*3 + numPyprojectFiles*3
+
+	// Check if the correct number of packages were processed
+	actualCount := int(atomic.LoadInt32(&processedCount))
+	if actualCount < expectedPackages/2 { // We might not get exactly the expected count due to caching, but should be at least half
+		t.Errorf("Expected approximately %d packages to be processed, but got only %d", expectedPackages, actualCount)
+	}
+
+	// Log performance info
+	t.Logf("Processed %d files with %d packages in %v",
+		numRequirementsFiles+numPackageJSONFiles+numPyprojectFiles,
+		actualCount,
+		duration)
+
+	// Rather than checking exact package versions, we'll verify that files were processed by checking if they were changed
+	requirementsCount := 0
+	for i := 0; i < numRequirementsFiles; i++ {
+		filename := filepath.Join(tempDir, fmt.Sprintf("requirements-%d.txt", i))
+		content, err := os.ReadFile(filename)
+		if err != nil {
+			t.Fatalf("Failed to read updated file: %v", err)
+		}
+
+		if bytes.Contains(content, []byte("9.9.9")) {
+			requirementsCount++
+		}
+	}
+
+	packageJSONCount := 0
+	for i := 0; i < numPackageJSONFiles; i++ {
+		filename := filepath.Join(tempDir, fmt.Sprintf("node-project-%d", i), "package.json")
+		content, err := os.ReadFile(filename)
+		if err != nil {
+			t.Fatalf("Failed to read updated file: %v", err)
+		}
+
+		if bytes.Contains(content, []byte("9.9.9")) {
+			packageJSONCount++
+		}
+	}
+
+	pyprojectCount := 0
+	for i := 0; i < numPyprojectFiles; i++ {
+		filename := filepath.Join(tempDir, fmt.Sprintf("poetry-project-%d", i), "pyproject.toml")
+		content, err := os.ReadFile(filename)
+		if err != nil {
+			t.Fatalf("Failed to read updated file: %v", err)
+		}
+
+		if bytes.Contains(content, []byte("9.9.9")) {
+			pyprojectCount++
+		}
+	}
+
+	t.Logf("Updated files: %d requirements, %d package.json, %d pyproject.toml",
+		requirementsCount, packageJSONCount, pyprojectCount)
+
+	if requirementsCount+packageJSONCount+pyprojectCount == 0 {
+		t.Errorf("No files were updated during parallel processing")
+	}
+}
+
+// countingTransport is a custom http.RoundTripper that counts requests
+type countingTransport struct {
+	http.RoundTripper
+	counter *int32
+}
+
+// RoundTrip implements the http.RoundTripper interface
+func (t *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Intercept all NPM registry requests and return a mock response
+	if strings.Contains(req.URL.String(), "registry.npmjs.org") {
+		atomic.AddInt32(t.counter, 1)
+		time.Sleep(50 * time.Millisecond) // Simulate network delay
+
+		// Create a mock response
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(`{
+				"name": "test-package",
+				"version": "9.9.9",
+				"description": "Mock package for testing"
+			}`)),
+			Header: make(http.Header),
+		}, nil
+	}
+
+	// For non-NPM requests, pass through to the original transport
+	return t.RoundTripper.RoundTrip(req)
+}
+
+// Verify PackageManager interface implementation
+var _ packagemanager.PackageManager = &MockPackageManager{}

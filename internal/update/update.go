@@ -8,11 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 
-	semv "github.com/Masterminds/semver/v3"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/rvben/ru/internal/depgraph"
@@ -90,42 +90,110 @@ func (u *Updater) Run() error {
 }
 
 func (u *Updater) ProcessDirectory(dir string) error {
-	// Convert dir to absolute path
-	absDir, err := filepath.Abs(dir)
+	// Find all requirements files in the directory
+	requirementsFiles, packageJSONFiles, pyprojectFiles, err := u.findRequirementsFiles(dir)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path: %v", err)
+		return err
 	}
 
-	utils.VerboseLog("Processing directory:", absDir)
+	utils.VerboseLog("Found", len(requirementsFiles), "requirements files")
+	utils.VerboseLog("Found", len(packageJSONFiles), "package.json files")
+	utils.VerboseLog("Found", len(pyprojectFiles), "pyproject.toml files")
 
-	// Get all files in the directory
-	files, err := os.ReadDir(absDir)
-	if err != nil {
-		return fmt.Errorf("failed to read directory: %v", err)
+	// Use parallel processing if we have multiple files
+	if len(requirementsFiles)+len(packageJSONFiles)+len(pyprojectFiles) > 1 {
+		return u.processFilesParallel(requirementsFiles, packageJSONFiles, pyprojectFiles)
 	}
 
-	for _, file := range files {
-		if file.IsDir() {
-			continue
+	// Process each requirements file
+	for _, file := range requirementsFiles {
+		if err := u.updateRequirementsFile(file); err != nil {
+			return err
 		}
+	}
 
-		filePath := filepath.Join(absDir, file.Name())
-		switch {
-		case strings.HasSuffix(file.Name(), ".txt") && strings.Contains(strings.ToLower(file.Name()), "requirements"):
-			utils.VerboseLog("Found requirements file:", filePath)
-			if err := u.updateRequirementsFile(filePath); err != nil {
-				return fmt.Errorf("failed to update requirements file: %v", err)
+	// Process each package.json file
+	for _, file := range packageJSONFiles {
+		if err := u.updatePackageJsonFile(file); err != nil {
+			return err
+		}
+	}
+
+	// Process each pyproject.toml file
+	for _, file := range pyprojectFiles {
+		if err := u.updatePyProjectFile(file); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// processFilesParallel processes multiple files in parallel using a worker pool
+func (u *Updater) processFilesParallel(requirementsFiles, packageJSONFiles, pyprojectFiles []string) error {
+	type fileJob struct {
+		path     string
+		fileType string // "requirements", "package.json", or "pyproject.toml"
+	}
+
+	// Create a channel for jobs
+	jobs := make(chan fileJob, len(requirementsFiles)+len(packageJSONFiles)+len(pyprojectFiles))
+
+	// Create a channel for results
+	results := make(chan error, len(requirementsFiles)+len(packageJSONFiles)+len(pyprojectFiles))
+
+	// Determine the number of workers - use min(numCPU*2, numFiles) to avoid creating too many goroutines
+	// for small numbers of files
+	numFiles := len(requirementsFiles) + len(packageJSONFiles) + len(pyprojectFiles)
+	numWorkers := runtime.NumCPU() * 2
+	if numWorkers > numFiles {
+		numWorkers = numFiles
+	}
+	utils.VerboseLog("Using", numWorkers, "workers for parallel processing")
+
+	// Start workers
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				var err error
+				switch job.fileType {
+				case "requirements":
+					err = u.updateRequirementsFile(job.path)
+				case "package.json":
+					err = u.updatePackageJsonFile(job.path)
+				case "pyproject.toml":
+					err = u.updatePyProjectFile(job.path)
+				}
+				results <- err
 			}
-		case file.Name() == "pyproject.toml":
-			utils.VerboseLog("Found pyproject.toml file:", filePath)
-			if err := u.updatePyProjectFile(filePath); err != nil {
-				return fmt.Errorf("failed to update pyproject.toml: %v", err)
-			}
-		case file.Name() == "package.json":
-			utils.VerboseLog("Found package.json file:", filePath)
-			if err := u.updatePackageJsonFile(filePath); err != nil {
-				return fmt.Errorf("failed to update package.json: %v", err)
-			}
+		}()
+	}
+
+	// Submit jobs
+	for _, file := range requirementsFiles {
+		jobs <- fileJob{path: file, fileType: "requirements"}
+	}
+	for _, file := range packageJSONFiles {
+		jobs <- fileJob{path: file, fileType: "package.json"}
+	}
+	for _, file := range pyprojectFiles {
+		jobs <- fileJob{path: file, fileType: "pyproject.toml"}
+	}
+	close(jobs)
+
+	// Wait for all workers to complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Check for errors
+	for err := range results {
+		if err != nil {
+			return err
 		}
 	}
 
@@ -407,61 +475,82 @@ func (u *Updater) updateLine(line, packageName, versionConstraints, latestVersio
 	return fmt.Sprintf("%s==%s", packageName, latestVersion), nil
 }
 
-func (u *Updater) checkVersionConstraints(latestVersion, versionConstraints string) (bool, error) {
-	v, err := semv.NewVersion(latestVersion)
-	if err != nil {
-		return false, fmt.Errorf("error parsing version: %w", err)
+func (u *Updater) checkVersionConstraints(latestVerStr, versionConstraints string) (bool, error) {
+	// Fast path for simple equality constraints
+	if strings.HasPrefix(versionConstraints, "==") && versionConstraints[2:] == latestVerStr {
+		return false, nil
 	}
 
-	if strings.HasPrefix(versionConstraints, "~=") {
-		return u.checkCompatibleRelease(v, versionConstraints[2:])
-	} else if strings.HasPrefix(versionConstraints, "==") {
-		currentVersion := strings.TrimPrefix(versionConstraints, "==")
-		cv, err := semv.NewVersion(currentVersion)
-		if err != nil {
-			return false, fmt.Errorf("error parsing current version: %w", err)
+	// Parse the latest version
+	latestVer := utils.ParseVersion(latestVerStr)
+	if !latestVer.IsValid {
+		return false, fmt.Errorf("invalid latest version: %s", latestVerStr)
+	}
+
+	shouldUpdate := false
+
+	// Check for complex constraints with commas (e.g. ">=1.0.0,<2.0.0")
+	if strings.Contains(versionConstraints, ",") {
+		parts := strings.Split(versionConstraints, ",")
+
+		// Check if all parts of the constraint are satisfied
+		validForAll := true
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if !latestVer.IsCompatible(part) {
+				validForAll = false
+				break
+			}
 		}
-		return v.GreaterThan(cv), nil
+
+		shouldUpdate = validForAll
+	} else if strings.HasPrefix(versionConstraints, "==") {
+		// Handle equality constraint
+		currentVersion := strings.TrimPrefix(versionConstraints, "==")
+		currentVer := utils.ParseVersion(currentVersion)
+
+		// Check if the current version is valid
+		if !currentVer.IsValid {
+			return false, currentVer.Error
+		}
+
+		shouldUpdate = latestVer.IsGreaterThan(currentVer)
+	} else if strings.HasPrefix(versionConstraints, ">=") ||
+		strings.HasPrefix(versionConstraints, ">") ||
+		strings.HasPrefix(versionConstraints, "<=") ||
+		strings.HasPrefix(versionConstraints, "<") ||
+		strings.HasPrefix(versionConstraints, "~=") ||
+		strings.HasPrefix(versionConstraints, "^") {
+		// Handle other constraints
+		shouldUpdate = latestVer.IsCompatible(versionConstraints)
+	} else {
+		// Default to simple version comparison
+		currentVer := utils.ParseVersion(versionConstraints)
+
+		// Check if the current version is valid
+		if !currentVer.IsValid {
+			return false, currentVer.Error
+		}
+
+		shouldUpdate = latestVer.IsGreaterThan(currentVer)
 	}
 
-	c, err := semv.NewConstraint(versionConstraints)
-	if err != nil {
-		return false, fmt.Errorf("error parsing constraint: %w", err)
-	}
-
-	return c.Check(v), nil
+	return shouldUpdate, nil
 }
 
-func (u *Updater) checkCompatibleRelease(v *semv.Version, constraint string) (bool, error) {
-	parts := strings.Split(constraint, ".")
-	var lowerBound, upperBound *semv.Version
-	var err error
+func (u *Updater) checkCompatibleRelease(v *utils.Version, constraint string) (bool, error) {
+	// ~= operator (compatible release)
+	specifierVersion := strings.TrimPrefix(constraint, "~=")
 
-	if len(parts) == 2 {
-		// For ~=X.Y, allow X.Y.0 <= version < (X+1).0.0
-		lowerBound, err = semv.NewVersion(constraint + ".0")
-		if err != nil {
-			return false, fmt.Errorf("error parsing lower bound version: %w", err)
-		}
-		upperBound, err = semv.NewVersion(fmt.Sprintf("%d.0.0", utils.MustAtoi(parts[0])+1))
-		if err != nil {
-			return false, fmt.Errorf("error parsing upper bound version: %w", err)
-		}
-	} else if len(parts) == 3 {
-		// For ~=X.Y.Z, allow X.Y.Z <= version < X.(Y+1).0
-		lowerBound, err = semv.NewVersion(constraint)
-		if err != nil {
-			return false, fmt.Errorf("error parsing lower bound version: %w", err)
-		}
-		upperBound, err = semv.NewVersion(fmt.Sprintf("%s.%d.0", parts[0], utils.MustAtoi(parts[1])+1))
-		if err != nil {
-			return false, fmt.Errorf("error parsing upper bound version: %w", err)
-		}
-	} else {
-		return false, fmt.Errorf("invalid constraint format: %s", constraint)
-	}
+	// Parse the specifier version
+	specVer := utils.ParseVersion(specifierVersion)
 
-	return v.Compare(lowerBound) >= 0 && v.Compare(upperBound) < 0, nil
+	// Compatible release must have:
+	// 1. Same major version
+	// 2. Either higher minor version, or same minor and higher or equal patch
+	return v.Parts[0] == specVer.Parts[0] &&
+		(v.Parts[1] > specVer.Parts[1] ||
+			(v.Parts[1] == specVer.Parts[1] && v.Parts[2] >= specVer.Parts[2])), nil
 }
 
 func (u *Updater) updatePackageJsonFile(filePath string) error {
@@ -722,4 +811,75 @@ func (u *Updater) getLatestVersions(filePath string, versions map[string]string)
 	}
 
 	return nil
+}
+
+// findRequirementsFiles finds all requirements files, package.json files, and pyproject.toml files in the given directory
+func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, pyproject []string, err error) {
+	// Convert dir to absolute path
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to get absolute path: %v", err)
+	}
+
+	utils.VerboseLog("Searching for dependency files in:", absDir)
+
+	// Common requirements patterns
+	reqPatterns := []string{
+		"requirements.txt",
+		"requirements-*.txt",
+		"requirements_*.txt",
+		"*.requirements.txt",
+		"requirements-dev.txt",
+		"requirements_dev.txt",
+	}
+
+	// Initialize return slices
+	requirements = []string{}
+	packageJSON = []string{}
+	pyproject = []string{}
+
+	err = filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Check if the file is a requirements file
+		filename := info.Name()
+		for _, pattern := range reqPatterns {
+			matched, err := filepath.Match(pattern, filename)
+			if err != nil {
+				return err
+			}
+			if matched {
+				utils.VerboseLog("Found requirements file:", path)
+				requirements = append(requirements, path)
+				break
+			}
+		}
+
+		// Check if the file is a package.json file
+		if filename == "package.json" {
+			utils.VerboseLog("Found package.json file:", path)
+			packageJSON = append(packageJSON, path)
+		}
+
+		// Check if the file is a pyproject.toml file
+		if filename == "pyproject.toml" {
+			utils.VerboseLog("Found pyproject.toml file:", path)
+			pyproject = append(pyproject, path)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to walk directory: %v", err)
+	}
+
+	return requirements, packageJSON, pyproject, nil
 }
