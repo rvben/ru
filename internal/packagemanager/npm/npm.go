@@ -2,6 +2,7 @@ package npm
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,7 +32,8 @@ func (n *NPM) GetLatestVersion(packageName string) (string, error) {
 
 	// Use optimized HTTP client with retry and circuit breaker
 	resp, err := n.client.GetWithRetry(url, map[string]string{
-		"Accept": "application/json",
+		"Accept":          "application/json",
+		"Accept-Encoding": "gzip, deflate", // Explicitly request compression
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
@@ -42,8 +44,20 @@ func (n *NPM) GetLatestVersion(packageName string) (string, error) {
 		return "", fmt.Errorf("failed to fetch latest version for package %s: status %s", packageName, resp.Status)
 	}
 
+	// Handle compressed response if needed
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		utils.VerboseLog("NPM response is gzip encoded, decompressing")
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("error creating gzip reader: %w", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+
 	// Use optimized JSON extraction instead of the standard decoder
-	version, err := extractVersionFromNPMJSON(resp.Body)
+	version, err := extractVersionFromNPMJSON(reader)
 	if err != nil {
 		return "", fmt.Errorf("error processing JSON for package %s: %w", packageName, err)
 	}
