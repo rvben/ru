@@ -82,14 +82,14 @@ func (cb *CircuitBreaker) Trip() {
 		cb.lastTrip = time.Now()
 		cb.lock.Unlock()
 		atomic.AddInt64(&cb.metrics.CircuitBreakerTrips, 1)
-		VerboseLog("Circuit breaker tripped")
+		Debug("http", "Circuit breaker tripped")
 	}
 }
 
 // Reset closes the circuit breaker
 func (cb *CircuitBreaker) Reset() {
 	atomic.StoreInt32(&cb.state, 0)
-	VerboseLog("Circuit breaker reset")
+	Debug("http", "Circuit breaker reset")
 }
 
 // RecordSuccess records a successful request
@@ -198,7 +198,8 @@ func (c *OptimizerHTTPClient) GetWithRetry(url string, headers map[string]string
 			jitter := 1.0 + (rand.Float64()*2-1)*BackoffJitter
 			sleepTime := time.Duration(float64(backoff) * jitter)
 
-			VerboseLog(fmt.Sprintf("Retrying request to %s (attempt %d/%d) after %v", url, attempt, MaxRetries, sleepTime))
+			// Log retry
+			Debug("http", "Retrying request to %s (attempt %d/%d) after %v", url, attempt, MaxRetries, sleepTime)
 			time.Sleep(sleepTime)
 
 			c.metrics.RecordRetry()
@@ -227,14 +228,14 @@ func (c *OptimizerHTTPClient) GetWithRetry(url string, headers map[string]string
 		resp, err = c.client.Do(req)
 
 		if err != nil {
-			VerboseLog(fmt.Sprintf("Request error: %v", err))
+			Debug("http", "Request error: %v", err)
 			c.metrics.RecordFailure()
 			continue
 		}
 
 		// Check for server errors (5xx)
 		if resp.StatusCode >= 500 {
-			VerboseLog(fmt.Sprintf("Server error: %s", resp.Status))
+			Debug("http", "Server error: %s", resp.Status)
 			resp.Body.Close()
 			c.metrics.RecordFailure()
 			continue

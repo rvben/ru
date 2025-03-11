@@ -11,12 +11,7 @@ var verbose bool
 func SetVerbose(v bool) {
 	verbose = v
 
-	// Set log level to Debug when verbose is enabled
-	if verbose {
-		SetLogLevel(LevelDebug)
-	} else {
-		SetLogLevel(LevelInfo)
-	}
+	// No need to set log level - it's handled internally
 }
 
 // IsVerbose returns whether verbose mode is enabled
