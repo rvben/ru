@@ -458,7 +458,10 @@ func (p *PyPI) ClearExtraIndexURLs() {
 func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 	// Check if using cached version
 	if !p.noCache {
-		if cachedVersion, ok := p.versionCache[packageName]; ok {
+		p.cacheMutex.Lock()
+		cachedVersion, ok := p.versionCache[packageName]
+		p.cacheMutex.Unlock()
+		if ok {
 			utils.VerboseLog(p.verbose, fmt.Sprintf("Using cached version for %s: %s", packageName, cachedVersion))
 			return cachedVersion, nil
 		}
@@ -488,7 +491,9 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 		// If found in any index, cache and return the result
 		if err == nil {
 			if !p.noCache {
+				p.cacheMutex.Lock()
 				p.versionCache[packageName] = version
+				p.cacheMutex.Unlock()
 			}
 			return version, nil
 		}
@@ -505,7 +510,9 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 
 	// Cache the version
 	if !p.noCache {
+		p.cacheMutex.Lock()
 		p.versionCache[packageName] = version
+		p.cacheMutex.Unlock()
 	}
 
 	return version, nil

@@ -1,5 +1,5 @@
 .EXPORT_ALL_VARIABLES:
-.PHONY: test release run self-update build new-release
+.PHONY: test release run self-update build new-release release-minor release-patch
 
 # Get version from git tag, fallback to last tag + commit hash for dev builds
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -22,6 +22,38 @@ new-release:
 	git tag "v$(v)"
 	git push origin "v$(v)"
 	@echo "Release workflow started. Check: https://github.com/rvben/ru/actions"
+
+# Create a new minor release (increment the middle number)
+release-minor:
+	@echo "Creating new minor release..."
+	@LATEST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//'); \
+	if [ -z "$$LATEST_TAG" ]; then \
+		echo "No existing tags found. Please create an initial release with make new-release v=0.1.0"; \
+		exit 1; \
+	fi; \
+	MAJOR=$$(echo $$LATEST_TAG | cut -d. -f1); \
+	MINOR=$$(echo $$LATEST_TAG | cut -d. -f2); \
+	PATCH=$$(echo $$LATEST_TAG | cut -d. -f3); \
+	NEW_MINOR=$$((MINOR + 1)); \
+	NEW_VERSION="$$MAJOR.$$NEW_MINOR.0"; \
+	echo "Latest version: $$LATEST_TAG, New version: $$NEW_VERSION"; \
+	$(MAKE) new-release v=$$NEW_VERSION
+
+# Create a new patch release (increment the last number)
+release-patch:
+	@echo "Creating new patch release..."
+	@LATEST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//'); \
+	if [ -z "$$LATEST_TAG" ]; then \
+		echo "No existing tags found. Please create an initial release with make new-release v=0.1.0"; \
+		exit 1; \
+	fi; \
+	MAJOR=$$(echo $$LATEST_TAG | cut -d. -f1); \
+	MINOR=$$(echo $$LATEST_TAG | cut -d. -f2); \
+	PATCH=$$(echo $$LATEST_TAG | cut -d. -f3); \
+	NEW_PATCH=$$((PATCH + 1)); \
+	NEW_VERSION="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
+	echo "Latest version: $$LATEST_TAG, New version: $$NEW_VERSION"; \
+	$(MAKE) new-release v=$$NEW_VERSION
 
 release:
 	git tag v$(shell echo ${VERSION} | sed 's/^v//') && git push origin v$(shell echo ${VERSION} | sed 's/^v//')
