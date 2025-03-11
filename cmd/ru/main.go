@@ -161,6 +161,7 @@ func main() {
 	// Create a new FlagSet for global flags
 	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
 	verboseFlag := globalFlags.Bool("verbose", false, "Enable verbose logging")
+	noColorFlag := globalFlags.Bool("no-color", false, "Disable colored output")
 	// Only declare noCacheFlag if we're going to use it
 	// noCacheFlag := globalFlags.Bool("no-cache", false, "Disable caching")
 	globalFlags.Bool("no-cache", false, "Disable caching")
@@ -171,6 +172,7 @@ func main() {
 	// Add the global flags to the update command as well
 	updateVerboseFlag := updateFlags.Bool("verbose", false, "Enable verbose logging")
 	updateNoCacheFlag := updateFlags.Bool("no-cache", false, "Disable caching")
+	updateNoColorFlag := updateFlags.Bool("no-color", false, "Disable colored output")
 
 	// Check if any args were provided
 	if len(os.Args) < 2 {
@@ -189,72 +191,81 @@ func main() {
 		}
 		paths := updateFlags.Args()
 
+		// Set verbose mode
+		utils.SetVerbose(*updateVerboseFlag)
+
+		// Set color mode
+		if *updateNoColorFlag {
+			utils.DisableColors()
+		}
+
 		// Log if running in test mode
 		testMode := isTestMode()
 		if testMode {
-			utils.VerboseLog("Running in test mode")
+			utils.Info("system", "Running in test mode")
 			if cacheDir := getCacheDir(); cacheDir != "" {
-				utils.VerboseLog("Using cache directory:", cacheDir)
+				utils.Info("system", "Using cache directory: %s", cacheDir)
 			}
 		}
 
-		// Set verbose mode based on the flag or environment
-		verbose := *updateVerboseFlag
-		if os.Getenv("RU_VERBOSE") == "1" {
-			verbose = true
-		}
-		utils.SetVerbose(verbose)
+		// Create updater
+		updater := update.New(*updateNoCacheFlag, *verifyFlag, paths)
 
-		// Initialize updater with appropriate settings
-		noCache := *updateNoCacheFlag
-		if os.Getenv("RU_NO_CACHE") == "1" {
-			noCache = true
-		}
-
-		verify := *verifyFlag
-		if os.Getenv("RU_VERIFY") == "1" {
-			verify = true
-		}
-
-		updater := update.New(noCache, verify, paths)
+		// Run the updater
 		if err := updater.Run(); err != nil {
-			if !strings.Contains(err.Error(), "dependency verification failed for") {
-				log.Fatal(err)
-			}
+			utils.Error("Update failed: %v", err)
 			os.Exit(1)
 		}
 	case "version":
-		fmt.Printf("ru version %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("ru version %s\n", version)
 	case "clean-cache":
+		// Parse global flags
 		if err := globalFlags.Parse(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
-		utils.SetVerbose(*verboseFlag)
-		if err := cache.Clean(); err != nil {
-			log.Fatalf("Failed to clean cache: %v", err)
-		}
-		fmt.Println("Cache cleaned successfully")
-	case "self":
-		if err := globalFlags.Parse(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
+
+		// Set verbose mode
 		utils.SetVerbose(*verboseFlag)
 
-		args := globalFlags.Args()
-		if len(args) == 0 {
-			fmt.Println("Usage: ru self <command>")
-			fmt.Println("\nCommands:")
-			fmt.Println("  update  Update ru to the latest version")
+		// Set color mode
+		if *noColorFlag {
+			utils.DisableColors()
+		}
+
+		// Clean the cache
+		if err := cache.Clean(); err != nil {
+			utils.Error("Failed to clean cache: %v", err)
+			os.Exit(1)
+		}
+		utils.Success("Cache cleaned successfully")
+	case "self":
+		// Check if we have a subcommand
+		if len(os.Args) < 3 {
+			printHelp(globalFlags, updateFlags)
 			os.Exit(1)
 		}
 
-		switch args[0] {
-		case "update":
+		// Parse global flags
+		if err := globalFlags.Parse(os.Args[3:]); err != nil {
+			log.Fatal(err)
+		}
+
+		// Set verbose mode
+		utils.SetVerbose(*verboseFlag)
+
+		// Set color mode
+		if *noColorFlag {
+			utils.DisableColors()
+		}
+
+		// Handle self update
+		if os.Args[2] == "update" {
 			if err := selfUpdate(); err != nil {
-				log.Fatalf("Failed to self-update: %v", err)
+				utils.Error("Self update failed: %v", err)
+				os.Exit(1)
 			}
-		default:
-			fmt.Printf("Unknown self command '%s'. Use 'ru self update' to update ru.\n", args[0])
+		} else {
+			printHelp(globalFlags, updateFlags)
 			os.Exit(1)
 		}
 	case "align":

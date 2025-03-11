@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"log"
 	"net/url"
 	"strconv"
 )
@@ -11,18 +10,18 @@ var verbose bool
 // SetVerbose sets the verbose logging flag
 func SetVerbose(v bool) {
 	verbose = v
+
+	// Set log level to Debug when verbose is enabled
+	if verbose {
+		SetLogLevel(LevelDebug)
+	} else {
+		SetLogLevel(LevelInfo)
+	}
 }
 
 // IsVerbose returns whether verbose mode is enabled
 func IsVerbose() bool {
 	return verbose
-}
-
-// VerboseLog prints log messages only if verbose mode is enabled
-func VerboseLog(v ...interface{}) {
-	if verbose {
-		log.Println(v...)
-	}
 }
 
 func MustAtoi(s string) int {

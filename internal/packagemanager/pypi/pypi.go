@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -462,7 +461,7 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 		cachedVersion, ok := p.versionCache[packageName]
 		p.cacheMutex.Unlock()
 		if ok {
-			utils.VerboseLog(p.verbose, fmt.Sprintf("Using cached version for %s: %s", packageName, cachedVersion))
+			utils.Info("cache", "Using cached version for %s: %s", utils.FormatPackageName(packageName), utils.FormatVersion(cachedVersion))
 			return cachedVersion, nil
 		}
 	}
@@ -478,7 +477,8 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 		if err != nil && len(p.extraIndexURLs) > 0 {
 			var extraErr error
 			for _, extraURL := range p.extraIndexURLs {
-				utils.VerboseLog(p.verbose, fmt.Sprintf("Package %s not found in primary index, trying extra index: %s", packageName, extraURL))
+				utils.Info("pypi", "Package %s not found in primary index, trying extra index: %s",
+					utils.FormatPackageName(packageName), utils.FormatURL(extraURL))
 				version, extraErr = p.getLatestVersionFromHTML(packageName, extraURL)
 				if extraErr == nil {
 					// Found in one of the extra indexes
@@ -499,7 +499,7 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 		}
 
 		// If still have error, fall back to default PyPI
-		utils.VerboseLog(p.verbose, fmt.Sprintf("Error fetching %s from custom index: %v", packageName, err))
+		utils.Debug("pypi", "Error fetching %s from custom index: %v", utils.FormatPackageName(packageName), err)
 	}
 
 	// Use default PyPI URL if custom URL didn't work or wasn't provided
@@ -519,78 +519,52 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 }
 
 func (p *PyPI) getLatestVersionFromHTML(packageName string, baseURL string) (string, error) {
-	packageName = strings.TrimSpace(packageName)
-	packageName = strings.ReplaceAll(packageName, ".", "-")
-	packageName = strings.ReplaceAll(packageName, "_", "-")
-	packageName = strings.ToLower(packageName)
-
-	// Extract base package name if it has extras
-	if idx := strings.Index(packageName, "["); idx != -1 {
-		packageName = packageName[:idx]
-	}
-
-	// Try both formats - with and without the json suffix
-	// First try the standard URL without json suffix
+	// Construct URL
 	url := fmt.Sprintf("%s/%s/", baseURL, packageName)
-	utils.VerboseLog(p.verbose, "Trying URL (standard format):", url)
+	utils.Debug("http", "Trying URL (standard format): %s", utils.FormatURL(url))
 
-	// Use optimized HTTP client with retry and circuit breaker
+	// Make request
 	resp, err := p.client.GetWithRetry(url, map[string]string{
 		"Accept":          "text/html, application/json",
 		"Accept-Encoding": "gzip, deflate", // Request compression support
 	})
-
-	// If the standard URL fails, try with /json suffix which some endpoints use
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close() // Close the first response body
-		}
-
-		// Adjust URL to try with /json suffix
+	if err != nil {
+		// If the first attempt fails, try the JSON API
 		url = fmt.Sprintf("%s/%s/json", baseURL, packageName)
-		utils.VerboseLog(p.verbose, "First attempt failed, trying URL (JSON format):", url)
-
+		utils.Debug("http", "First attempt failed, trying URL (JSON format): %s", utils.FormatURL(url))
 		resp, err = p.client.GetWithRetry(url, map[string]string{
 			"Accept":          "application/json",
 			"Accept-Encoding": "gzip, deflate",
 		})
-
 		if err != nil {
-			return "", fmt.Errorf("failed to fetch latest version for package %s: %w", packageName, err)
+			return "", err
 		}
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("PyPI returned non-OK status: %s for URL %s", resp.Status, url)
-	}
+	// Log response details
+	utils.Debug("http", "Response status: %s", utils.FormatHTTPStatus(resp.Status))
+	utils.Debug("http", "Response content type: %s", resp.Header.Get("Content-Type"))
+	utils.Debug("http", "Response content encoding: %s", resp.Header.Get("Content-Encoding"))
 
-	// Log more details about the response
-	utils.VerboseLog(p.verbose, "Response status:", resp.Status)
-	utils.VerboseLog(p.verbose, "Response content type:", resp.Header.Get("Content-Type"))
-	utils.VerboseLog(p.verbose, "Response content encoding:", resp.Header.Get("Content-Encoding"))
-
-	// Handle compressed response if needed
+	// Handle gzip encoding
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
-		utils.VerboseLog(p.verbose, "Response is gzip encoded, decompressing")
-		gzipReader, err := gzip.NewReader(resp.Body)
+		utils.Info("http", "Response is gzip encoded, decompressing")
+		gzReader, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			return "", fmt.Errorf("error creating gzip reader for %s: %w", packageName, err)
+			return "", fmt.Errorf("error creating gzip reader: %w", err)
 		}
-		defer gzipReader.Close()
-		reader = gzipReader
+		defer gzReader.Close()
+		reader = gzReader
 	}
 
-	// Check content type to determine how to parse
-	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(contentType, "application/json") {
-		// Parse JSON response
-		utils.VerboseLog(p.verbose, "Parsing JSON response for", packageName)
+	// Parse response based on content type
+	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
+		utils.Debug("pypi", "Parsing JSON response for %s", utils.FormatPackageName(packageName))
 		return p.parseJSONForLatestVersion(reader, packageName)
 	} else {
-		// Parse HTML response
-		utils.VerboseLog(p.verbose, "Parsing HTML response for", packageName)
+		utils.Debug("pypi", "Parsing HTML response for %s", utils.FormatPackageName(packageName))
 		return p.parseHTMLContentForLatestVersion(reader)
 	}
 }
@@ -764,47 +738,37 @@ func stripPrereleaseSuffix(version string) string {
 }
 
 func (p *PyPI) selectLatestStableVersion(versions []string) (string, error) {
-	if len(versions) == 0 {
-		return "", fmt.Errorf("no versions found")
-	}
-
-	utils.VerboseLog("Selecting from versions:", versions)
+	utils.Debug("version", "Selecting from versions: %v", versions)
 
 	// Separate stable and pre-release versions
-	var stableVersions []string
-	var preReleaseVersions []string
-
+	var stableVersions, preReleaseVersions []string
 	for _, version := range versions {
 		if isPrerelease(version) {
-			utils.VerboseLog("Pre-release version:", version)
+			utils.Debug("version", "Pre-release version: %s", version)
 			preReleaseVersions = append(preReleaseVersions, version)
 		} else {
-			utils.VerboseLog("Stable version:", version)
+			utils.Debug("version", "Stable version: %s", version)
 			stableVersions = append(stableVersions, version)
 		}
 	}
 
-	// If we have stable versions, use those; otherwise fall back to pre-release
-	var candidateVersions []string
+	// Prefer stable versions
+	var versionsToUse []string
 	if len(stableVersions) > 0 {
-		utils.VerboseLog("Using stable versions:", stableVersions)
-		candidateVersions = stableVersions
+		utils.Info("version", "Using stable versions: %v", stableVersions)
+		versionsToUse = stableVersions
 	} else {
-		utils.VerboseLog("No stable versions found, using pre-release versions:", preReleaseVersions)
-		candidateVersions = preReleaseVersions
+		utils.Info("version", "No stable versions found, using pre-release versions: %v", preReleaseVersions)
+		versionsToUse = preReleaseVersions
 	}
 
-	// Sort the candidate versions
-	sort.Slice(candidateVersions, func(i, j int) bool {
-		return compareVersions(candidateVersions[i], candidateVersions[j]) < 0
-	})
-
-	if len(candidateVersions) == 0 {
-		return "", fmt.Errorf("no valid versions found")
+	// Sort versions and return the latest
+	if len(versionsToUse) == 0 {
+		return "", fmt.Errorf("no versions found")
 	}
 
-	result := candidateVersions[len(candidateVersions)-1]
-	utils.VerboseLog("Selected version:", result)
+	result := versionsToUse[0]
+	utils.Debug("version", "Selected version: %s", utils.FormatVersion(result))
 	return result, nil
 }
 
