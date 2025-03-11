@@ -169,6 +169,7 @@ func main() {
 	// Create a new FlagSet for update command
 	updateFlags := flag.NewFlagSet("update", flag.ExitOnError)
 	verifyFlag := updateFlags.Bool("verify", false, "Verify dependency compatibility (slower)")
+	dryRunFlag := updateFlags.Bool("dry-run", false, "Show what would be updated without making changes")
 	// Add the global flags to the update command as well
 	updateVerboseFlag := updateFlags.Bool("verbose", false, "Enable verbose logging")
 	updateNoCacheFlag := updateFlags.Bool("no-cache", false, "Disable caching")
@@ -210,6 +211,11 @@ func main() {
 
 		// Create updater
 		updater := update.New(*updateNoCacheFlag, *verifyFlag, paths)
+
+		// Set dry run mode if flag is provided
+		if *dryRunFlag {
+			updater.SetDryRun(true)
+		}
 
 		// Run the updater
 		if err := updater.Run(); err != nil {

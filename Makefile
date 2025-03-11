@@ -1,5 +1,5 @@
 .EXPORT_ALL_VARIABLES:
-.PHONY: test release run self-update build new-release release-minor release-patch
+.PHONY: build test clean fmt check doc version-get version-major version-minor version-patch version-push release-major release-minor release-patch run self-update
 
 # Get version from git tag, fallback to last tag + commit hash for dev builds
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -7,7 +7,82 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 build:
 	go build -ldflags "-X main.version=${VERSION}" -o bin/ru ./cmd/ru
 
-# Create a new release with the specified version
+test:
+	go test -v ./...
+
+clean:
+	go clean
+
+fmt:
+	go fmt ./...
+
+check:
+	go vet ./...
+	go list -json ./... | grep -v /vendor/ | xargs -n 1 go vet
+
+doc:
+	go doc -all ./...
+
+run:
+	go run -ldflags "-X main.version=${VERSION}" cmd/ru/main.go update
+
+self-update:
+	go run -ldflags "-X main.version=${VERSION}" cmd/ru/main.go self update
+
+# Version tagging targets
+version-get:
+	@echo "Current version: $$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+
+version-major:
+	@echo "Creating new major version tag..."
+	$(eval CURRENT := $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0))
+	$(eval MAJOR := $(shell echo $(CURRENT) | sed -E 's/v([0-9]+)\.[0-9]+\.[0-9]+/\1/'))
+	$(eval NEW_MAJOR := $(shell echo $$(( $(MAJOR) + 1 ))))
+	$(eval NEW_TAG := v$(NEW_MAJOR).0.0)
+	@echo "Current: $(CURRENT) -> New: $(NEW_TAG)"
+	@git commit --allow-empty -m "Bump version to $(NEW_TAG)"
+	@git tag -a $(NEW_TAG) -m "Release $(NEW_TAG)"
+	@echo "Version $(NEW_TAG) created and committed. Run 'make version-push' to trigger release workflow."
+
+version-minor:
+	@echo "Creating new minor version tag..."
+	$(eval CURRENT := $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0))
+	$(eval MAJOR := $(shell echo $(CURRENT) | sed -E 's/v([0-9]+)\.[0-9]+\.[0-9]+/\1/'))
+	$(eval MINOR := $(shell echo $(CURRENT) | sed -E 's/v[0-9]+\.([0-9]+)\.[0-9]+/\1/'))
+	$(eval NEW_MINOR := $(shell echo $$(( $(MINOR) + 1 ))))
+	$(eval NEW_TAG := v$(MAJOR).$(NEW_MINOR).0)
+	@echo "Current: $(CURRENT) -> New: $(NEW_TAG)"
+	@git commit --allow-empty -m "Bump version to $(NEW_TAG)"
+	@git tag -a $(NEW_TAG) -m "Release $(NEW_TAG)"
+	@echo "Version $(NEW_TAG) created and committed. Run 'make version-push' to trigger release workflow."
+
+version-patch:
+	@echo "Creating new patch version tag..."
+	$(eval CURRENT := $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0))
+	$(eval MAJOR := $(shell echo $(CURRENT) | sed -E 's/v([0-9]+)\.[0-9]+\.[0-9]+/\1/'))
+	$(eval MINOR := $(shell echo $(CURRENT) | sed -E 's/v[0-9]+\.([0-9]+)\.[0-9]+/\1/'))
+	$(eval PATCH := $(shell echo $(CURRENT) | sed -E 's/v[0-9]+\.[0-9]+\.([0-9]+)/\1/'))
+	$(eval NEW_PATCH := $(shell echo $$(( $(PATCH) + 1 ))))
+	$(eval NEW_TAG := v$(MAJOR).$(MINOR).$(NEW_PATCH))
+	@echo "Current: $(CURRENT) -> New: $(NEW_TAG)"
+	@git commit --allow-empty -m "Bump version to $(NEW_TAG)"
+	@git tag -a $(NEW_TAG) -m "Release $(NEW_TAG)"
+	@echo "Version $(NEW_TAG) created and committed. Run 'make version-push' to trigger release workflow."
+
+# Target to push the new tag and changes automatically
+version-push:
+	$(eval LATEST_TAG := $(shell git describe --tags --abbrev=0))
+	@echo "Pushing latest commit and tag $(LATEST_TAG) to origin..."
+	@git push
+	@git push origin $(LATEST_TAG)
+	@echo "Release workflow triggered for $(LATEST_TAG)"
+
+# Combined targets for one-step release
+release-major: version-major version-push
+release-minor: version-minor version-push
+release-patch: version-patch version-push
+
+# For compatibility with previous Makefile
 new-release:
 	@if [ -z "$(v)" ]; then \
 		echo "Please specify version: make new-release v=0.1.54"; \
@@ -22,47 +97,3 @@ new-release:
 	git tag "v$(v)"
 	git push origin "v$(v)"
 	@echo "Release workflow started. Check: https://github.com/rvben/ru/actions"
-
-# Create a new minor release (increment the middle number)
-release-minor:
-	@echo "Creating new minor release..."
-	@LATEST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//'); \
-	if [ -z "$$LATEST_TAG" ]; then \
-		echo "No existing tags found. Please create an initial release with make new-release v=0.1.0"; \
-		exit 1; \
-	fi; \
-	MAJOR=$$(echo $$LATEST_TAG | cut -d. -f1); \
-	MINOR=$$(echo $$LATEST_TAG | cut -d. -f2); \
-	PATCH=$$(echo $$LATEST_TAG | cut -d. -f3); \
-	NEW_MINOR=$$((MINOR + 1)); \
-	NEW_VERSION="$$MAJOR.$$NEW_MINOR.0"; \
-	echo "Latest version: $$LATEST_TAG, New version: $$NEW_VERSION"; \
-	$(MAKE) new-release v=$$NEW_VERSION
-
-# Create a new patch release (increment the last number)
-release-patch:
-	@echo "Creating new patch release..."
-	@LATEST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//'); \
-	if [ -z "$$LATEST_TAG" ]; then \
-		echo "No existing tags found. Please create an initial release with make new-release v=0.1.0"; \
-		exit 1; \
-	fi; \
-	MAJOR=$$(echo $$LATEST_TAG | cut -d. -f1); \
-	MINOR=$$(echo $$LATEST_TAG | cut -d. -f2); \
-	PATCH=$$(echo $$LATEST_TAG | cut -d. -f3); \
-	NEW_PATCH=$$((PATCH + 1)); \
-	NEW_VERSION="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
-	echo "Latest version: $$LATEST_TAG, New version: $$NEW_VERSION"; \
-	$(MAKE) new-release v=$$NEW_VERSION
-
-release:
-	git tag v$(shell echo ${VERSION} | sed 's/^v//') && git push origin v$(shell echo ${VERSION} | sed 's/^v//')
-
-test:
-	go test -v ./...
-
-run:
-	go run -ldflags "-X main.version=${VERSION}" cmd/ru/main.go update
-
-self-update:
-	go run -ldflags "-X main.version=${VERSION}" cmd/ru/main.go self update

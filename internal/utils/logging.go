@@ -156,6 +156,18 @@ func FormatHTTPStatus(status string) string {
 // Deprecated: Use the new logging functions instead
 // VerboseLog is kept for backward compatibility
 func VerboseLog(v ...interface{}) {
+	// Check if first argument is a boolean flag
+	if len(v) > 0 {
+		if flag, ok := v[0].(bool); ok {
+			// If the flag is false, don't log anything
+			if !flag {
+				return
+			}
+			// If the flag is true, log the rest of the arguments without the flag
+			v = v[1:]
+		}
+	}
+
 	if verbose {
 		// Convert all arguments to strings
 		parts := make([]string, len(v))
