@@ -21,6 +21,7 @@ import (
 	"github.com/rvben/ru/internal/packagemanager/pypi"
 	"github.com/rvben/ru/internal/packagemanager/pyproject"
 	"github.com/rvben/ru/internal/utils"
+	ignore "github.com/sabhiram/go-gitignore"
 )
 
 type Updater struct {
@@ -31,6 +32,7 @@ type Updater struct {
 	modulesUpdated int
 	paths          []string
 	verify         bool
+	ignorer        *ignore.GitIgnore
 }
 
 func New(noCache bool, verify bool, paths []string) *Updater {
@@ -49,6 +51,18 @@ func (u *Updater) Run() error {
 	// First check if PyPI endpoint is accessible
 	if err := u.pypi.SetCustomIndexURL(); err != nil {
 		return fmt.Errorf("failed to set custom PyPI index: %w", err)
+	}
+
+	// Load .gitignore file
+	ignoreFile := filepath.Join(".", ".gitignore")
+	if _, err := os.Stat(ignoreFile); err == nil {
+		var ignoreErr error
+		u.ignorer, ignoreErr = ignore.CompileIgnoreFile(ignoreFile)
+		if ignoreErr != nil {
+			utils.VerboseLog("Warning: error compiling .gitignore file:", ignoreErr)
+		} else {
+			utils.VerboseLog("Using .gitignore file for filtering")
+		}
 	}
 
 	// If no paths provided, use current directory
@@ -989,8 +1003,22 @@ func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, 
 			return err
 		}
 
-		// Skip directories
+		// Skip directories that are in .gitignore
 		if info.IsDir() {
+			if u.ignorer != nil && u.ignorer.MatchesPath(path) {
+				utils.VerboseLog("Ignoring directory:", path)
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Check if the file should be ignored
+		relPath, err := filepath.Rel(absDir, path)
+		if err != nil {
+			return err
+		}
+		if u.ignorer != nil && u.ignorer.MatchesPath(relPath) {
+			utils.VerboseLog("Ignoring file:", relPath)
 			return nil
 		}
 
