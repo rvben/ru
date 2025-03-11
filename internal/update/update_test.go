@@ -485,3 +485,115 @@ func (t *countingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 // Verify PackageManager interface implementation
 var _ packagemanager.PackageManager = &MockPackageManager{}
+
+func TestPoetryStyleDependencyDetection(t *testing.T) {
+	tests := []struct {
+		name           string
+		content        string
+		expectedPkgs   []string
+		unexpectedPkgs []string
+	}{
+		{
+			name: "Valid poetry dependencies",
+			content: `[tool.poetry.dependencies]
+flask = "2.0.0"
+requests = "^2.31.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.4.3"`,
+			expectedPkgs:   []string{"flask", "requests", "pytest"},
+			unexpectedPkgs: []string{},
+		},
+		{
+			name: "Configuration parameters should be ignored",
+			content: `[[tool.uv.index]]
+name = "default"
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "custom"
+url = "https://repo.example.com/simple/"
+publish-url = "https://repo.example.com/publish/"
+
+[project]
+dependencies = [
+    "requests==2.31.0"
+]`,
+			expectedPkgs:   []string{"requests"},
+			unexpectedPkgs: []string{"name", "url", "publish-url"},
+		},
+		{
+			name: "Mixed content with valid and invalid sections",
+			content: `[project]
+name = "example-project"
+version = "0.1.0"
+dependencies = [
+    "flask==2.0.0",
+    "requests==2.31.0"
+]
+
+[tool.isort]
+profile = "black"
+
+[tool.coverage.report]
+include_namespace_packages = true
+omit = [
+    '**/__init__.py',
+    'cdk.out/*'
+]
+
+[tool.poetry.dependencies]
+django = "^4.2.0"
+`,
+			expectedPkgs:   []string{"flask", "requests", "django"},
+			unexpectedPkgs: []string{"profile", "include_namespace_packages", "omit"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a temporary file with the test content
+			tempFile, err := os.CreateTemp("", "pyproject-*.toml")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(tempFile.Name())
+
+			_, err = tempFile.WriteString(tt.content)
+			if err != nil {
+				t.Fatalf("Failed to write to temp file: %v", err)
+			}
+			tempFile.Close()
+
+			// Create a mock updater with a custom GetLatestVersion function that records package names
+			processedPackages := make(map[string]bool)
+			mockPyPI := &MockPackageManager{
+				getLatestVersionFunc: func(pkgName string) (string, error) {
+					processedPackages[pkgName] = true
+					return "9.9.9", nil
+				},
+			}
+
+			updater := NewUpdater(mockPyPI)
+			// Process the temp file
+			err = updater.processPyProjectFile(tempFile.Name())
+			if err != nil {
+				t.Fatalf("processPyProjectFile failed: %v", err)
+			}
+
+			// Check that all expected packages were processed
+			for _, pkg := range tt.expectedPkgs {
+				if !processedPackages[pkg] {
+					t.Errorf("Expected package %q to be processed, but it wasn't", pkg)
+				}
+			}
+
+			// Check that none of the unexpected packages were processed
+			for _, pkg := range tt.unexpectedPkgs {
+				if processedPackages[pkg] {
+					t.Errorf("Package %q should not have been processed, but it was", pkg)
+				}
+			}
+		})
+	}
+}

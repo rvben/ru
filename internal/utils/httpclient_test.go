@@ -3,6 +3,7 @@ package utils
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,7 +141,10 @@ func TestHTTPClientCircuitBreaker(t *testing.T) {
 	if err3 == nil {
 		t.Fatal("Expected error due to open circuit breaker, got nil")
 	}
-	if err3.Error() != "circuit breaker open: too many recent failures" {
+
+	// Check for host-specific circuit breaker error message
+	if !strings.Contains(err3.Error(), "circuit breaker open for host") &&
+		err3.Error() != "circuit breaker open: too many recent failures" {
 		t.Errorf("Expected circuit breaker error, got: %v", err3)
 	}
 

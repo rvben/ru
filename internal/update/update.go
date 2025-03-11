@@ -1097,7 +1097,7 @@ func (u *Updater) processPyProjectFile(filePath string) error {
 		// Clean the package name by removing any quotes or extra whitespace
 		pkgName = strings.Trim(pkgName, `"' `)
 
-		if pkgName == "" || pyproj.ShouldIgnorePackage(pkgName) {
+		if pkgName == "" {
 			continue
 		}
 
@@ -1114,18 +1114,64 @@ func (u *Updater) processPyProjectFile(filePath string) error {
 
 	// Also check for Poetry-style dependencies (package = "version")
 	rePoetry := regexp.MustCompile(`(?m)([a-zA-Z0-9_.-]+)\s*=\s*["']([^"']+)["']`)
-	matchesPoetry := rePoetry.FindAllStringSubmatch(string(content), -1)
 
-	for _, match := range matchesPoetry {
-		if len(match) < 3 {
+	// Define valid dependency section headers to check against
+	validSections := []string{
+		"[tool.poetry.dependencies]",
+		"[tool.poetry.dev-dependencies]",
+		"[project.dependencies]",
+		"[project.optional-dependencies]",
+		"[dependency-groups]",
+	}
+
+	contentStr := string(content)
+
+	// Check if the match is within a valid dependency section
+	isInValidSection := func(pos int) bool {
+		// Find the last section header before this position
+		lastSectionPos := -1
+		lastSectionHeader := ""
+
+		for _, section := range validSections {
+			sectionPos := strings.LastIndex(contentStr[:pos], section)
+			if sectionPos > lastSectionPos {
+				lastSectionPos = sectionPos
+				lastSectionHeader = section
+			}
+		}
+
+		// No valid section found before this position
+		if lastSectionPos == -1 {
+			return false
+		}
+
+		// Check if there's another section header between the last valid section and this position
+		nextSectionPos := findNextSection(contentStr, lastSectionPos+len(lastSectionHeader))
+		return nextSectionPos == -1 || nextSectionPos > pos
+	}
+
+	// Find all potential Poetry-style dependencies
+	matchesPoetry := rePoetry.FindAllStringSubmatchIndex(contentStr, -1)
+
+	for _, matchIndices := range matchesPoetry {
+		if len(matchIndices) < 4 {
 			continue
 		}
 
-		pkgName := match[1]
+		// Check if this match is within a valid dependency section
+		matchPos := matchIndices[0]
+		if !isInValidSection(matchPos) {
+			continue
+		}
+
+		// Extract the package name using the capture group indices
+		pkgNameStart, pkgNameEnd := matchIndices[2], matchIndices[3]
+		pkgName := contentStr[pkgNameStart:pkgNameEnd]
+
 		// Clean the package name by removing any quotes or extra whitespace
 		pkgName = strings.Trim(pkgName, `"' `)
 
-		if pkgName == "" || pyproj.ShouldIgnorePackage(pkgName) {
+		if pkgName == "" {
 			continue
 		}
 
@@ -1151,4 +1197,14 @@ func (u *Updater) processPyProjectFile(filePath string) error {
 	u.modulesUpdated += len(updatedModules)
 
 	return nil
+}
+
+// findNextSection finds the next TOML section header after the given position
+func findNextSection(content string, startPos int) int {
+	sectionRegex := regexp.MustCompile(`(?m)^\[.*?\]`)
+	matches := sectionRegex.FindAllStringIndex(content[startPos:], -1)
+	if len(matches) > 0 {
+		return startPos + matches[0][0]
+	}
+	return -1
 }

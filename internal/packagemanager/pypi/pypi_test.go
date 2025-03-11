@@ -854,3 +854,61 @@ url = "https://extra2.example.com/simple"
 		})
 	}
 }
+
+func TestIsValidVersionString(t *testing.T) {
+	validVersions := []string{
+		"1.0.0",
+		"1.2.3",
+		"v1.2.3",
+		"1.2.3-alpha",
+		"1.2.3-beta.1",
+		"1.2.3+build.456",
+		"1.2.3-alpha+build.456",
+		"2.0.0rc1",
+		"0.1.0dev1",
+		"package-1.2.3.tar.gz",
+		"package-1.2.3-py3-none-any.whl",
+		"1.2.3.zip",
+		"1.2",
+		"1_2_3",
+		"1-2-3",
+	}
+
+	invalidVersions := []string{
+		"",
+		"help",
+		"sponsors",
+		"rss",
+		"#content",
+		"account",
+		"project",
+		"#description",
+		"#history",
+		"#files",
+		"https:",
+		"user",
+		"mailto:info@example.com",
+		"search",
+		"#data",
+		"stats",
+		"trademarks",
+		"security",
+		"sitemap",
+		"nodigits",
+		".",
+		"-",
+		"_",
+	}
+
+	for _, version := range validVersions {
+		if !isValidVersionString(version) {
+			t.Errorf("Expected %s to be a valid version string, but it was not", version)
+		}
+	}
+
+	for _, version := range invalidVersions {
+		if isValidVersionString(version) {
+			t.Errorf("Expected %s to be an invalid version string, but it was valid", version)
+		}
+	}
+}

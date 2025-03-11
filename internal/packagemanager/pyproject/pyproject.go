@@ -490,16 +490,20 @@ func (p *PyProject) LoadAndUpdate(versions map[string]string) ([]string, error) 
 			if parts := strings.SplitN(dep, op, 2); len(parts) == 2 {
 				pkgName := strings.TrimSpace(parts[0])
 				currVersion := strings.TrimSpace(parts[1])
-				if newVersion, ok := versions[pkgName]; ok && newVersion != currVersion {
+
+				if newVersion, ok := versions[pkgName]; ok {
 					// Only update if the new version is greater than the current version
 					// for "==" constraints, or if it's different for other constraints
 					if op == "==" {
 						currVer := utils.ParseVersion(currVersion)
 						newVer := utils.ParseVersion(newVersion)
-						if !newVer.IsGreaterThan(currVer) {
+						shouldUpdate := newVer.IsGreaterThan(currVer)
+
+						if !shouldUpdate {
 							continue
 						}
 					}
+
 					p.Project.Dependencies[i] = fmt.Sprintf("%s%s%s", pkgName, op, newVersion)
 					updatedModules = append(updatedModules, pkgName)
 				}
@@ -581,22 +585,151 @@ func (p *PyProject) LoadAndUpdate(versions map[string]string) ([]string, error) 
 		updatedContent = updateDependenciesInTOML(updatedContent, "[dependency-groups]", group, deps)
 	}
 
-	// Update Poetry dependencies
-	if len(p.Tool.Poetry.Dependencies) > 0 {
-		poetryDeps := make([]string, 0, len(p.Tool.Poetry.Dependencies))
-		for name, constraint := range p.Tool.Poetry.Dependencies {
-			poetryDeps = append(poetryDeps, fmt.Sprintf("%s = %q", name, constraint))
-		}
-		updatedContent = updatePoetryDependenciesInTOML(updatedContent, "[tool.poetry]", "dependencies", poetryDeps)
-	}
+	// Update Poetry dependencies or create the sections if they don't exist
+	if len(p.Tool.Poetry.Dependencies) > 0 || len(p.Tool.Poetry.DevDependencies) > 0 {
+		// Handle Poetry format
+		// First, check if we have an inline format or section format
+		if strings.Contains(originalContent, "dependencies = {") || strings.Contains(originalContent, "dev-dependencies = {") {
+			// If we have the inline format, replace it completely with section format
+			// First prepare the dependencies
+			poetryDeps := make([]string, 0, len(p.Tool.Poetry.Dependencies))
+			for name, constraint := range p.Tool.Poetry.Dependencies {
+				poetryDeps = append(poetryDeps, fmt.Sprintf("%s = %q", name, constraint))
+			}
 
-	// Update Poetry dev-dependencies
-	if len(p.Tool.Poetry.DevDependencies) > 0 {
-		poetryDevDeps := make([]string, 0, len(p.Tool.Poetry.DevDependencies))
-		for name, constraint := range p.Tool.Poetry.DevDependencies {
-			poetryDevDeps = append(poetryDevDeps, fmt.Sprintf("%s = %q", name, constraint))
+			// Then prepare the dev-dependencies
+			poetryDevDeps := make([]string, 0, len(p.Tool.Poetry.DevDependencies))
+			for name, constraint := range p.Tool.Poetry.DevDependencies {
+				poetryDevDeps = append(poetryDevDeps, fmt.Sprintf("%s = %q", name, constraint))
+			}
+
+			// Find the [tool.poetry] section
+			poetrySection := "[tool.poetry]"
+			poetrySectionIndex := strings.Index(updatedContent, poetrySection)
+			if poetrySectionIndex != -1 {
+				poetrySectionEnd := poetrySectionIndex + len(poetrySection)
+
+				// Find the next section or end of file
+				nextSectionIndex := findNextSection(updatedContent, poetrySectionEnd)
+				if nextSectionIndex == -1 {
+					nextSectionIndex = len(updatedContent)
+				}
+
+				// Create a new section with both dependencies and dev-dependencies
+				var newSection strings.Builder
+				newSection.WriteString(poetrySection)
+				newSection.WriteString("\n\n[tool.poetry.dependencies]\n")
+				for _, dep := range poetryDeps {
+					newSection.WriteString(dep)
+					newSection.WriteString("\n")
+				}
+
+				newSection.WriteString("\n[tool.poetry.dev-dependencies]\n")
+				for _, dep := range poetryDevDeps {
+					newSection.WriteString(dep)
+					newSection.WriteString("\n")
+				}
+
+				// Replace the old section with the new one
+				updatedContent = updatedContent[:poetrySectionIndex] + newSection.String() + updatedContent[nextSectionIndex:]
+			}
+		} else {
+			// We have the regular section format, update them individually
+			if len(p.Tool.Poetry.Dependencies) > 0 {
+				poetryDeps := make([]string, 0, len(p.Tool.Poetry.Dependencies))
+				for name, constraint := range p.Tool.Poetry.Dependencies {
+					poetryDeps = append(poetryDeps, fmt.Sprintf("%s = %q", name, constraint))
+				}
+
+				// Check if the tool.poetry.dependencies section exists
+				if strings.Contains(updatedContent, "[tool.poetry.dependencies]") {
+					updatedContent = updatePoetryDependenciesInTOML(updatedContent, "[tool.poetry]", "dependencies", poetryDeps)
+				} else if strings.Contains(updatedContent, "[tool.poetry]") {
+					// If the tool.poetry section exists but not the dependencies subsection, add it
+					poetrySection := "[tool.poetry]"
+					poetrySectionIndex := strings.Index(updatedContent, poetrySection)
+					if poetrySectionIndex != -1 {
+						poetrySectionEnd := poetrySectionIndex + len(poetrySection)
+
+						// Find the next section or end of file
+						nextSectionIndex := findNextSection(updatedContent, poetrySectionEnd)
+						if nextSectionIndex == -1 {
+							nextSectionIndex = len(updatedContent)
+						}
+
+						// Create the dependencies subsection
+						var newSection strings.Builder
+						newSection.WriteString("\n\n[tool.poetry.dependencies]\n")
+						for _, dep := range poetryDeps {
+							newSection.WriteString(dep)
+							newSection.WriteString("\n")
+						}
+
+						// Insert the new section right after the [tool.poetry] section
+						updatedContent = updatedContent[:poetrySectionEnd] + newSection.String() + updatedContent[poetrySectionEnd:]
+					}
+				}
+			}
+
+			// Update Poetry dev-dependencies
+			if len(p.Tool.Poetry.DevDependencies) > 0 {
+				poetryDevDeps := make([]string, 0, len(p.Tool.Poetry.DevDependencies))
+				for name, constraint := range p.Tool.Poetry.DevDependencies {
+					poetryDevDeps = append(poetryDevDeps, fmt.Sprintf("%s = %q", name, constraint))
+				}
+
+				// Check if the tool.poetry.dev-dependencies section exists
+				if strings.Contains(updatedContent, "[tool.poetry.dev-dependencies]") {
+					updatedContent = updatePoetryDependenciesInTOML(updatedContent, "[tool.poetry]", "dev-dependencies", poetryDevDeps)
+				} else if strings.Contains(updatedContent, "[tool.poetry.dependencies]") {
+					// If the dependencies section exists, add after it
+					depsSection := "[tool.poetry.dependencies]"
+					depsSectionIndex := strings.Index(updatedContent, depsSection)
+					if depsSectionIndex != -1 {
+						// Find the end of the dependencies section
+						nextSectionIndex := findNextSection(updatedContent, depsSectionIndex+len(depsSection))
+						if nextSectionIndex == -1 {
+							nextSectionIndex = len(updatedContent)
+						}
+
+						// Create the dev-dependencies subsection
+						var newSection strings.Builder
+						newSection.WriteString("\n\n[tool.poetry.dev-dependencies]\n")
+						for _, dep := range poetryDevDeps {
+							newSection.WriteString(dep)
+							newSection.WriteString("\n")
+						}
+
+						// Insert the new section after the dependencies section
+						updatedContent = updatedContent[:nextSectionIndex] + newSection.String() + updatedContent[nextSectionIndex:]
+					}
+				} else if strings.Contains(updatedContent, "[tool.poetry]") {
+					// If only the tool.poetry section exists, add after it
+					poetrySection := "[tool.poetry]"
+					poetrySectionIndex := strings.Index(updatedContent, poetrySection)
+					if poetrySectionIndex != -1 {
+						poetrySectionEnd := poetrySectionIndex + len(poetrySection)
+
+						// Find the next section or end of file
+						nextSectionIndex := findNextSection(updatedContent, poetrySectionEnd)
+						if nextSectionIndex == -1 {
+							nextSectionIndex = len(updatedContent)
+						}
+
+						// Create the dev-dependencies subsection
+						var newSection strings.Builder
+						newSection.WriteString("\n\n[tool.poetry.dev-dependencies]\n")
+						for _, dep := range poetryDevDeps {
+							newSection.WriteString(dep)
+							newSection.WriteString("\n")
+						}
+
+						// Insert the new section right after the [tool.poetry] section
+						updatedContent = updatedContent[:poetrySectionEnd] + newSection.String() + updatedContent[poetrySectionEnd:]
+					}
+				}
+			}
 		}
-		updatedContent = updatePoetryDependenciesInTOML(updatedContent, "[tool.poetry]", "dev-dependencies", poetryDevDeps)
 	}
 
 	// Write the updated content back to the file
@@ -607,8 +740,8 @@ func (p *PyProject) LoadAndUpdate(versions map[string]string) ([]string, error) 
 	return removeDuplicates(updatedModules), nil
 }
 
-// updateDependenciesInTOML updates the dependencies list in a TOML file section
-// while preserving the original formatting and other sections
+// updateDependenciesInTOML updates a list of dependencies in a TOML file.
+// It finds the section and key, and replaces the list of dependencies with the new ones.
 func updateDependenciesInTOML(content, section, key string, dependencies []string) string {
 	// Find the section in the content
 	sectionIndex := strings.Index(content, section)
@@ -616,39 +749,97 @@ func updateDependenciesInTOML(content, section, key string, dependencies []strin
 		return content
 	}
 
-	// Find the key in the section
-	keyStart := sectionIndex + len(section)
+	// Find the key within the section
 	keyPattern := fmt.Sprintf("%s = [", key)
-	keyIndex := strings.Index(content[keyStart:], keyPattern)
+	keyIndex := strings.Index(content[sectionIndex:], keyPattern)
 	if keyIndex == -1 {
 		return content
 	}
-	keyIndex += keyStart
+	keyIndex += sectionIndex // Adjust the index to be relative to the start of content
 
 	// Find the end of the dependencies list
-	listStart := keyIndex + len(keyPattern)
-	listEnd := findMatchingCloseBracket(content, listStart)
-	if listEnd == -1 {
+	startBracketPos := keyIndex + len(keyPattern) - 1 // position of the opening bracket
+	endBracketPos := findMatchingCloseBracket(content, startBracketPos)
+	if endBracketPos == -1 {
 		return content
 	}
 
-	// Build the new dependencies list with proper formatting
-	var newList strings.Builder
-	newList.WriteString(keyPattern)
-	for i, dep := range dependencies {
-		if i == 0 {
-			newList.WriteString("\n")
-		}
-		if i == len(dependencies)-1 {
-			newList.WriteString(fmt.Sprintf("    %q\n", dep))
-		} else {
-			newList.WriteString(fmt.Sprintf("    %q,\n", dep))
+	// Extract the old dependencies list for formatting reference
+	oldDepsList := content[keyIndex : endBracketPos+1]
+
+	// Extract the indentation style from the original content
+	// Default to 4 spaces if we can't determine it
+	indentation := "    "
+
+	// Try to find the indentation by looking at the first dependency line
+	depStart := strings.Index(oldDepsList, "\n")
+	if depStart != -1 {
+		depStart++
+		depEnd := strings.Index(oldDepsList[depStart:], "\n")
+		if depEnd != -1 {
+			line := oldDepsList[depStart : depStart+depEnd]
+			// Count leading spaces or tabs
+			for i, c := range line {
+				if c != ' ' && c != '\t' {
+					indentation = line[:i]
+					break
+				}
+			}
 		}
 	}
-	newList.WriteString("]")
 
-	// Replace the old list with the new one
-	return content[:keyIndex] + newList.String() + content[listEnd+1:]
+	// Construct the new dependencies list with proper formatting
+	var newDepsBuilder strings.Builder
+	newDepsBuilder.WriteString(fmt.Sprintf("%s = [\n", key))
+
+	for i, dep := range dependencies {
+		newDepsBuilder.WriteString(indentation)
+		newDepsBuilder.WriteString("\"")
+		newDepsBuilder.WriteString(dep)
+		newDepsBuilder.WriteString("\"")
+		if i < len(dependencies)-1 {
+			newDepsBuilder.WriteString(",\n")
+		} else {
+			newDepsBuilder.WriteString("\n")
+		}
+	}
+
+	newDepsBuilder.WriteString("]")
+
+	newDepsList := newDepsBuilder.String()
+
+	// Replace the old dependencies list with the new one
+	newContent := content[:keyIndex] + newDepsList + content[endBracketPos+1:]
+
+	return newContent
+}
+
+// findMatchingCloseBracket finds the matching closing bracket for an opening bracket.
+// It assumes the startIndex is the position of the opening bracket, and returns the
+// position of the matching closing bracket, or -1 if not found.
+func findMatchingCloseBracket(content string, startIndex int) int {
+	if startIndex < 0 || startIndex >= len(content) {
+		return -1
+	}
+
+	if content[startIndex] != '[' {
+		return -1
+	}
+
+	depth := 1
+	for i := startIndex + 1; i < len(content); i++ {
+		c := content[i]
+		if c == '[' {
+			depth++
+		} else if c == ']' {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+
+	return -1
 }
 
 // updatePoetryDependenciesInTOML updates Poetry dependencies in a TOML file
@@ -688,36 +879,61 @@ func updatePoetryDependenciesInTOML(content, section, key string, dependencies [
 	return content[:subsectionIndex] + newSubsection.String() + content[nextSectionIndex:]
 }
 
-// findMatchingCloseBracket finds the index of the matching close bracket
-func findMatchingCloseBracket(content string, startIndex int) int {
-	depth := 1
-	for i := startIndex; i < len(content); i++ {
-		if content[i] == '[' {
-			depth++
-		} else if content[i] == ']' {
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
+// findNextSection finds the next TOML section after the given position
+func findNextSection(content string, startPos int) int {
+	// Ensure startPos is valid
+	if startPos >= len(content) {
+		return -1
 	}
-	return -1
-}
 
-// findNextSection finds the index of the next TOML section
-func findNextSection(content string, startIndex int) int {
-	for i := startIndex; i < len(content); i++ {
-		if content[i] == '[' && (i == 0 || content[i-1] == '\n') {
-			// Look ahead to ensure this is really a section header
-			j := i + 1
-			for j < len(content) && content[j] != ']' && content[j] != '\n' {
-				j++
-			}
-			if j < len(content) && content[j] == ']' {
-				return i
-			}
-		}
+	// Skip to the next line if not at the beginning of a line
+	nextLinePos := strings.IndexByte(content[startPos:], '\n')
+	if nextLinePos != -1 {
+		startPos = startPos + nextLinePos + 1
 	}
+
+	// Make sure we haven't gone past the end of the content
+	if startPos >= len(content) {
+		return -1
+	}
+
+	// Find the next section header [section]
+	i := startPos
+	for i < len(content) {
+		// Find the start of a line
+		lineStart := i
+
+		// Find the end of the line
+		lineEndOffset := strings.IndexByte(content[lineStart:], '\n')
+		var lineEnd int
+		if lineEndOffset == -1 {
+			// No newline found, so the line goes to the end of the content
+			lineEnd = len(content)
+		} else {
+			lineEnd = lineStart + lineEndOffset
+		}
+
+		// Get the trimmed line
+		if lineEnd <= lineStart {
+			// This shouldn't happen, but just in case
+			break
+		}
+
+		line := strings.TrimSpace(content[lineStart:lineEnd])
+
+		// Check if this line is a section header
+		if len(line) > 0 && line[0] == '[' && strings.Contains(line, "]") {
+			return lineStart
+		}
+
+		// Move to the start of the next line
+		if lineEndOffset == -1 {
+			// No more lines
+			break
+		}
+		i = lineEnd + 1
+	}
+
 	return -1
 }
 

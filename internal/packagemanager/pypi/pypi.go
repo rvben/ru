@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +40,9 @@ type PyPI struct {
 	client                    *utils.OptimizerHTTPClient
 	potentialPipConfLocations []string
 	verbose                   bool
+	unreachableHosts          map[string]time.Time
+	unreachableHostsMutex     sync.RWMutex
+	hostRetryInterval         time.Duration
 }
 
 // New creates a new PyPI package manager
@@ -56,6 +61,8 @@ func New(verbose bool) *PyPI {
 			filepath.Join(os.Getenv("HOME"), ".pip", "pip.conf"),
 			"/etc/pip.conf",
 		},
+		unreachableHosts:  make(map[string]time.Time),
+		hostRetryInterval: 30 * time.Minute, // Only retry unreachable hosts after 30 minutes
 	}
 
 	// Check for custom index URLs from environment variables or pip.conf
@@ -477,6 +484,12 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 		if err != nil && len(p.extraIndexURLs) > 0 {
 			var extraErr error
 			for _, extraURL := range p.extraIndexURLs {
+				// Skip known unreachable hosts
+				if p.IsHostUnreachable(extraURL) {
+					utils.Debug("pypi", "Skipping unreachable extra index: %s", utils.FormatURL(extraURL))
+					continue
+				}
+
 				utils.Info("pypi", "Package %s not found in primary index, trying extra index: %s",
 					utils.FormatPackageName(packageName), utils.FormatURL(extraURL))
 				version, extraErr = p.getLatestVersionFromHTML(packageName, extraURL)
@@ -484,6 +497,13 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 					// Found in one of the extra indexes
 					err = nil
 					break
+				}
+
+				// Check if this host seems to be unreachable
+				if strings.Contains(extraErr.Error(), "no such host") ||
+					strings.Contains(extraErr.Error(), "connection refused") ||
+					strings.Contains(extraErr.Error(), "host is down") {
+					p.MarkHostUnreachable(extraURL)
 				}
 			}
 		}
@@ -519,24 +539,38 @@ func (p *PyPI) GetLatestVersion(packageName string) (string, error) {
 }
 
 func (p *PyPI) getLatestVersionFromHTML(packageName string, baseURL string) (string, error) {
-	// Construct URL
-	url := fmt.Sprintf("%s/%s/", baseURL, packageName)
-	utils.Debug("http", "Trying URL (standard format): %s", utils.FormatURL(url))
+	// Construct URL - use JSON API by default
+	url := fmt.Sprintf("%s/%s/json", baseURL, packageName)
+	utils.Debug("http", "Trying URL (JSON format): %s", utils.FormatURL(url))
 
 	// Make request
 	resp, err := p.client.GetWithRetry(url, map[string]string{
-		"Accept":          "text/html, application/json",
+		"Accept":          "application/json",
 		"Accept-Encoding": "gzip, deflate", // Request compression support
 	})
+
 	if err != nil {
-		// If the first attempt fails, try the JSON API
-		url = fmt.Sprintf("%s/%s/json", baseURL, packageName)
-		utils.Debug("http", "First attempt failed, trying URL (JSON format): %s", utils.FormatURL(url))
+		// Check if this seems to be a host unreachable error
+		if strings.Contains(err.Error(), "circuit breaker open for host") ||
+			strings.Contains(err.Error(), "no such host") ||
+			strings.Contains(err.Error(), "connection refused") {
+			p.MarkHostUnreachable(baseURL)
+		}
+
+		// If the JSON API fails, try the HTML endpoint as fallback
+		url = fmt.Sprintf("%s/%s/", baseURL, packageName)
+		utils.Debug("http", "JSON API failed, trying URL (HTML format): %s", utils.FormatURL(url))
 		resp, err = p.client.GetWithRetry(url, map[string]string{
-			"Accept":          "application/json",
+			"Accept":          "text/html",
 			"Accept-Encoding": "gzip, deflate",
 		})
 		if err != nil {
+			// Also check this second attempt for host unreachable errors
+			if strings.Contains(err.Error(), "circuit breaker open for host") ||
+				strings.Contains(err.Error(), "no such host") ||
+				strings.Contains(err.Error(), "connection refused") {
+				p.MarkHostUnreachable(baseURL)
+			}
 			return "", err
 		}
 	}
@@ -547,24 +581,29 @@ func (p *PyPI) getLatestVersionFromHTML(packageName string, baseURL string) (str
 	utils.Debug("http", "Response content type: %s", resp.Header.Get("Content-Type"))
 	utils.Debug("http", "Response content encoding: %s", resp.Header.Get("Content-Encoding"))
 
-	// Handle gzip encoding
+	// Check if we got a successful response
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP error: %s", resp.Status)
+	}
+
+	// Setup reader based on content encoding
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		utils.Info("http", "Response is gzip encoded, decompressing")
-		gzReader, err := gzip.NewReader(resp.Body)
+		gzipReader, err := gzip.NewReader(resp.Body)
 		if err != nil {
 			return "", fmt.Errorf("error creating gzip reader: %w", err)
 		}
-		defer gzReader.Close()
-		reader = gzReader
+		defer gzipReader.Close()
+		reader = gzipReader
 	}
 
-	// Parse response based on content type
+	// Parse the response based on content type
 	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
-		utils.Debug("pypi", "Parsing JSON response for %s", utils.FormatPackageName(packageName))
+		utils.Debug("pypi", "Parsing JSON response for %s", packageName)
 		return p.parseJSONForLatestVersion(reader, packageName)
 	} else {
-		utils.Debug("pypi", "Parsing HTML response for %s", utils.FormatPackageName(packageName))
+		utils.Debug("pypi", "Parsing HTML response for %s", packageName)
 		return p.parseHTMLContentForLatestVersion(reader)
 	}
 }
@@ -644,6 +683,7 @@ func (p *PyPI) parseHTMLContentForLatestVersion(reader io.Reader) (string, error
 		case tt == html.ErrorToken:
 			if z.Err() == io.EOF {
 				utils.VerboseLog(p.verbose, "Found versions:", versions)
+				utils.Debug("legacy", "Found versions: %v", versions)
 				if len(versions) == 0 {
 					return "", fmt.Errorf("no versions found")
 				}
@@ -652,6 +692,7 @@ func (p *PyPI) parseHTMLContentForLatestVersion(reader io.Reader) (string, error
 					return "", fmt.Errorf("error selecting latest version: %w", err)
 				}
 				utils.VerboseLog(p.verbose, "Selected version:", version)
+				utils.Debug("legacy", "Selected version: %s", version)
 				return version, nil
 			}
 			return "", z.Err()
@@ -665,11 +706,15 @@ func (p *PyPI) parseHTMLContentForLatestVersion(reader io.Reader) (string, error
 						parts := strings.Split(versionPath, "/")
 						if len(parts) > 0 {
 							version := parts[0]
-							// Only add if we haven't seen this version before
-							if !seenVersions[version] {
-								versions = append(versions, version)
-								seenVersions[version] = true
-								utils.VerboseLog(p.verbose, "Found version:", version, "IsPrerelease:", isPrerelease(version))
+							// Add validation for version strings
+							if isValidVersionString(version) {
+								// Only add if we haven't seen this version before
+								if !seenVersions[version] {
+									versions = append(versions, version)
+									seenVersions[version] = true
+									utils.VerboseLog(p.verbose, "Found version:", version, "IsPrerelease:", isPrerelease(version))
+									utils.Debug("legacy", "Found version: %s IsPrerelease: %v", version, isPrerelease(version))
+								}
 							}
 						}
 					}
@@ -677,6 +722,68 @@ func (p *PyPI) parseHTMLContentForLatestVersion(reader io.Reader) (string, error
 			}
 		}
 	}
+}
+
+// isValidVersionString checks if a string looks like a valid version
+func isValidVersionString(version string) bool {
+	// Common patterns that are not version numbers
+	invalidPatterns := []string{
+		"#", "help", "sponsors", "account", "project", "description",
+		"history", "files", "https:", "user", "mailto:", "search", "data",
+		"rss", "stats", "trademarks", "security", "sitemap", "simple",
+		"test", "docs", "issues", "download", "license", "about",
+		"contact", "privacy", "terms", "copyright", "donations", "blog",
+	}
+
+	// Check if the version contains any of the invalid patterns
+	for _, pattern := range invalidPatterns {
+		if strings.Contains(version, pattern) {
+			return false
+		}
+	}
+
+	// Basic version pattern: must contain at least one digit
+	if !strings.ContainsAny(version, "0123456789") {
+		return false
+	}
+
+	// More specific pattern for semantic versioning
+	// Allow formats like: 1.2.3, v1.2.3, 1.2.3-alpha, etc.
+	versionPattern := regexp.MustCompile(`^v?\d+(\.\d+)*(-[a-zA-Z0-9]+)?(\+[a-zA-Z0-9]+)?$`)
+	if versionPattern.MatchString(version) {
+		return true
+	}
+
+	// Handle version strings with dev/alpha/beta/rc suffixes without hyphens
+	// Examples: 1.2.3dev1, 1.2.3alpha2, 1.2.3beta1, 1.2.3rc1
+	devVersionPattern := regexp.MustCompile(`^v?\d+(\.\d+)*(dev|alpha|beta|rc)\d*$`)
+	if devVersionPattern.MatchString(version) {
+		return true
+	}
+
+	// If it's not a standard SemVer, check if it at least has numbers and typical version separators
+	// This is a more permissive check for non-standard version strings
+	if strings.ContainsAny(version, "0123456789") && strings.ContainsAny(version, "._-+") {
+		return true
+	}
+
+	// For package distributions (file names), they often have formats like package-1.2.3.tar.gz
+	// or package-1.2.3-py3-none-any.whl
+	if strings.HasSuffix(version, ".tar.gz") || strings.HasSuffix(version, ".whl") || strings.HasSuffix(version, ".zip") {
+		// Extract version part
+		parts := strings.Split(version, "-")
+		if len(parts) >= 2 {
+			// Check if any part looks like a version
+			for _, part := range parts {
+				if strings.ContainsAny(part, "0123456789") && strings.ContainsAny(part, "._-+") {
+					return true
+				}
+			}
+		}
+	}
+
+	// If we've gotten this far, it's probably not a valid version
+	return false
 }
 
 // compareVersions compares two version strings
@@ -767,7 +874,13 @@ func (p *PyPI) selectLatestStableVersion(versions []string) (string, error) {
 		return "", fmt.Errorf("no versions found")
 	}
 
-	result := versionsToUse[0]
+	// Sort versions in ascending order
+	sort.Slice(versionsToUse, func(i, j int) bool {
+		return compareVersions(versionsToUse[i], versionsToUse[j]) < 0
+	})
+
+	// Return the highest version (last in the sorted list)
+	result := versionsToUse[len(versionsToUse)-1]
 	utils.Debug("version", "Selected version: %s", utils.FormatVersion(result))
 	return result, nil
 }
@@ -982,4 +1095,44 @@ func (p *PyPI) ForceReadPipConf() {
 	}
 
 	utils.VerboseLog(p.verbose, "No pip.conf found in any of the potential locations")
+}
+
+// IsHostUnreachable checks if a host has been marked as unreachable
+func (p *PyPI) IsHostUnreachable(urlStr string) bool {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return false
+	}
+	host := parsedURL.Host
+
+	p.unreachableHostsMutex.RLock()
+	defer p.unreachableHostsMutex.RUnlock()
+
+	lastFailure, exists := p.unreachableHosts[host]
+	if !exists {
+		return false
+	}
+
+	// Check if we should retry the host after the retry interval
+	if time.Since(lastFailure) > p.hostRetryInterval {
+		return false
+	}
+
+	return true
+}
+
+// MarkHostUnreachable marks a host as unreachable
+func (p *PyPI) MarkHostUnreachable(urlStr string) {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return
+	}
+	host := parsedURL.Host
+
+	p.unreachableHostsMutex.Lock()
+	defer p.unreachableHostsMutex.Unlock()
+
+	p.unreachableHosts[host] = time.Now()
+	utils.Info("pypi", "Host %s marked as unreachable and will be skipped for %v",
+		utils.FormatURL(host), p.hostRetryInterval)
 }
