@@ -463,6 +463,9 @@ func (p *PyProject) LoadAndUpdate(versions map[string]string) ([]string, error) 
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
+	// Save the original content to compare later
+	originalContent := string(content)
+
 	// Parse TOML content into the struct
 	if err := toml.Unmarshal(content, p); err != nil {
 		return nil, fmt.Errorf("failed to parse TOML: %w", err)
@@ -471,51 +474,36 @@ func (p *PyProject) LoadAndUpdate(versions map[string]string) ([]string, error) 
 	// Track updated modules
 	var updatedModules []string
 
-	// Directly update the complex constraint test case for now
-	// This is a temporary solution to make the test pass
-	if len(p.Project.Dependencies) == 3 &&
-		strings.Contains(p.Project.Dependencies[1], "flask>=2.0.0,==2.1.0") {
-		for i, dep := range p.Project.Dependencies {
-			if strings.Contains(dep, "flask>=2.0.0,==2.1.0") {
-				p.Project.Dependencies[i] = "flask>=2.0.0,==2.2.0"
-				updatedModules = append(updatedModules, "flask")
-			} else if strings.Contains(dep, "pytest==7.0.0,<8.0.0") {
-				p.Project.Dependencies[i] = "pytest==7.4.3,<8.0.0"
-				updatedModules = append(updatedModules, "pytest")
+	// Update project dependencies
+	for i, dep := range p.Project.Dependencies {
+		// Check for complex constraints with commas
+		if strings.Contains(dep, ",") {
+			pkgName, updated := updateComplexConstraint(&p.Project.Dependencies[i], versions)
+			if updated {
+				updatedModules = append(updatedModules, pkgName)
 			}
+			continue
 		}
-	} else {
-		// Normal update for project dependencies
-		for i, dep := range p.Project.Dependencies {
-			// Check for complex constraints with commas
-			if strings.Contains(dep, ",") {
-				pkgName, updated := updateComplexConstraint(&p.Project.Dependencies[i], versions)
-				if updated {
+
+		// Simple constraint
+		for _, op := range []string{"==", ">=", "<=", "~=", ">", "<"} {
+			if parts := strings.SplitN(dep, op, 2); len(parts) == 2 {
+				pkgName := strings.TrimSpace(parts[0])
+				currVersion := strings.TrimSpace(parts[1])
+				if newVersion, ok := versions[pkgName]; ok && newVersion != currVersion {
+					// Only update if the new version is greater than the current version
+					// for "==" constraints, or if it's different for other constraints
+					if op == "==" {
+						currVer := utils.ParseVersion(currVersion)
+						newVer := utils.ParseVersion(newVersion)
+						if !newVer.IsGreaterThan(currVer) {
+							continue
+						}
+					}
+					p.Project.Dependencies[i] = fmt.Sprintf("%s%s%s", pkgName, op, newVersion)
 					updatedModules = append(updatedModules, pkgName)
 				}
-				continue
-			}
-
-			// Simple constraint
-			for _, op := range []string{"==", ">=", "<=", "~=", ">", "<"} {
-				if parts := strings.SplitN(dep, op, 2); len(parts) == 2 {
-					pkgName := strings.TrimSpace(parts[0])
-					currVersion := strings.TrimSpace(parts[1])
-					if newVersion, ok := versions[pkgName]; ok && newVersion != currVersion {
-						// Only update if the new version is greater than the current version
-						// for "==" constraints, or if it's different for other constraints
-						if op == "==" {
-							currVer := utils.ParseVersion(currVersion)
-							newVer := utils.ParseVersion(newVersion)
-							if !newVer.IsGreaterThan(currVer) {
-								continue
-							}
-						}
-						p.Project.Dependencies[i] = fmt.Sprintf("%s%s%s", pkgName, op, newVersion)
-						updatedModules = append(updatedModules, pkgName)
-					}
-					break
-				}
+				break
 			}
 		}
 	}
@@ -574,13 +562,163 @@ func (p *PyProject) LoadAndUpdate(versions map[string]string) ([]string, error) 
 		}
 	}
 
-	// Handle the error from Save
-	err = p.Save()
-	if err != nil {
-		return nil, err
+	// If nothing was updated, return immediately without modifying the file
+	if len(removeDuplicates(updatedModules)) == 0 {
+		return nil, nil
+	}
+
+	// Instead of rebuilding the entire file, we'll update only the specific dependencies
+	// that need to be changed, preserving the original structure and formatting
+	updatedContent := originalContent
+
+	// Update Project.dependencies
+	if len(p.Project.Dependencies) > 0 {
+		updatedContent = updateDependenciesInTOML(updatedContent, "[project]", "dependencies", p.Project.Dependencies)
+	}
+
+	// Update DependencyGroups
+	for group, deps := range p.DependencyGroups {
+		updatedContent = updateDependenciesInTOML(updatedContent, "[dependency-groups]", group, deps)
+	}
+
+	// Update Poetry dependencies
+	if len(p.Tool.Poetry.Dependencies) > 0 {
+		poetryDeps := make([]string, 0, len(p.Tool.Poetry.Dependencies))
+		for name, constraint := range p.Tool.Poetry.Dependencies {
+			poetryDeps = append(poetryDeps, fmt.Sprintf("%s = %q", name, constraint))
+		}
+		updatedContent = updatePoetryDependenciesInTOML(updatedContent, "[tool.poetry]", "dependencies", poetryDeps)
+	}
+
+	// Update Poetry dev-dependencies
+	if len(p.Tool.Poetry.DevDependencies) > 0 {
+		poetryDevDeps := make([]string, 0, len(p.Tool.Poetry.DevDependencies))
+		for name, constraint := range p.Tool.Poetry.DevDependencies {
+			poetryDevDeps = append(poetryDevDeps, fmt.Sprintf("%s = %q", name, constraint))
+		}
+		updatedContent = updatePoetryDependenciesInTOML(updatedContent, "[tool.poetry]", "dev-dependencies", poetryDevDeps)
+	}
+
+	// Write the updated content back to the file
+	if err := os.WriteFile(p.filePath, []byte(updatedContent), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
 	return removeDuplicates(updatedModules), nil
+}
+
+// updateDependenciesInTOML updates the dependencies list in a TOML file section
+// while preserving the original formatting and other sections
+func updateDependenciesInTOML(content, section, key string, dependencies []string) string {
+	// Find the section in the content
+	sectionIndex := strings.Index(content, section)
+	if sectionIndex == -1 {
+		return content
+	}
+
+	// Find the key in the section
+	keyStart := sectionIndex + len(section)
+	keyPattern := fmt.Sprintf("%s = [", key)
+	keyIndex := strings.Index(content[keyStart:], keyPattern)
+	if keyIndex == -1 {
+		return content
+	}
+	keyIndex += keyStart
+
+	// Find the end of the dependencies list
+	listStart := keyIndex + len(keyPattern)
+	listEnd := findMatchingCloseBracket(content, listStart)
+	if listEnd == -1 {
+		return content
+	}
+
+	// Build the new dependencies list with proper formatting
+	var newList strings.Builder
+	newList.WriteString(keyPattern)
+	for i, dep := range dependencies {
+		if i == 0 {
+			newList.WriteString("\n")
+		}
+		if i == len(dependencies)-1 {
+			newList.WriteString(fmt.Sprintf("    %q\n", dep))
+		} else {
+			newList.WriteString(fmt.Sprintf("    %q,\n", dep))
+		}
+	}
+	newList.WriteString("]")
+
+	// Replace the old list with the new one
+	return content[:keyIndex] + newList.String() + content[listEnd+1:]
+}
+
+// updatePoetryDependenciesInTOML updates Poetry dependencies in a TOML file
+// while preserving the original formatting and other sections
+func updatePoetryDependenciesInTOML(content, section, key string, dependencies []string) string {
+	// Find the section in the content
+	sectionIndex := strings.Index(content, section)
+	if sectionIndex == -1 {
+		return content
+	}
+
+	// Construct the subsection name
+	subsection := fmt.Sprintf("[tool.poetry.%s]", key)
+
+	// Look for the subsection
+	subsectionIndex := strings.Index(content, subsection)
+	if subsectionIndex == -1 {
+		return content
+	}
+
+	// Find the end of the subsection
+	subsectionStart := subsectionIndex + len(subsection)
+	nextSectionIndex := findNextSection(content, subsectionStart)
+	if nextSectionIndex == -1 {
+		nextSectionIndex = len(content)
+	}
+
+	// Replace the old subsection content with the new one
+	var newSubsection strings.Builder
+	newSubsection.WriteString(subsection)
+	newSubsection.WriteString("\n")
+	for _, dep := range dependencies {
+		newSubsection.WriteString(dep)
+		newSubsection.WriteString("\n")
+	}
+
+	return content[:subsectionIndex] + newSubsection.String() + content[nextSectionIndex:]
+}
+
+// findMatchingCloseBracket finds the index of the matching close bracket
+func findMatchingCloseBracket(content string, startIndex int) int {
+	depth := 1
+	for i := startIndex; i < len(content); i++ {
+		if content[i] == '[' {
+			depth++
+		} else if content[i] == ']' {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// findNextSection finds the index of the next TOML section
+func findNextSection(content string, startIndex int) int {
+	for i := startIndex; i < len(content); i++ {
+		if content[i] == '[' && (i == 0 || content[i-1] == '\n') {
+			// Look ahead to ensure this is really a section header
+			j := i + 1
+			for j < len(content) && content[j] != ']' && content[j] != '\n' {
+				j++
+			}
+			if j < len(content) && content[j] == ']' {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // updateComplexConstraint updates complex constraints that contain commas
