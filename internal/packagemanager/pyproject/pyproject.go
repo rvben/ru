@@ -792,16 +792,11 @@ func updateDependenciesInTOML(content, section, key string, dependencies []strin
 	var newDepsBuilder strings.Builder
 	newDepsBuilder.WriteString(fmt.Sprintf("%s = [\n", key))
 
-	for i, dep := range dependencies {
+	for _, dep := range dependencies {
 		newDepsBuilder.WriteString(indentation)
 		newDepsBuilder.WriteString("\"")
 		newDepsBuilder.WriteString(dep)
-		newDepsBuilder.WriteString("\"")
-		if i < len(dependencies)-1 {
-			newDepsBuilder.WriteString(",\n")
-		} else {
-			newDepsBuilder.WriteString("\n")
-		}
+		newDepsBuilder.WriteString("\",\n") // Always add a comma
 	}
 
 	newDepsBuilder.WriteString("]")

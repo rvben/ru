@@ -28,7 +28,7 @@ dependencies = [
 			want: `[project]
 dependencies = [
     "requests==2.32.0",
-    "flask==2.1.0"
+    "flask==2.1.0",
 ]
 `,
 		},
@@ -61,12 +61,12 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "aws-cdk-lib==2.165.0",
-    "constructs>=10.0.0,<11.0.0"
+    "constructs>=10.0.0,<11.0.0",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest==7.4.3"
+    "pytest==7.4.3",
 ]
 `,
 		},
@@ -160,7 +160,7 @@ name = "example-project"
 version = "0.1.0"
 dependencies = [
     "flask==2.3.3",
-    "requests==2.31.0"
+    "requests==2.31.0",
 ]
 
 [tool.isort]
@@ -238,7 +238,7 @@ version = "0.1.0"
 dependencies = [
     "requests>=2.28.0,<3.0.0",
     "flask>=2.0.0,==2.2.0",
-    "pytest==7.4.3,<8.0.0"
+    "pytest==7.4.3,<8.0.0",
 ]
 `,
 		},
@@ -259,7 +259,7 @@ dependencies = [
 dependencies = [
     "fastapi>=0.70.0,<=1.0.0",
     "uvicorn>=0.21.0",
-    "pydantic~=1.10.7"
+    "pydantic~=1.10.7",
 ]
 `,
 		},
