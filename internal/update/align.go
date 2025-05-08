@@ -65,7 +65,6 @@ func (a *Aligner) Run() error {
 		}
 	}
 
-	utils.VerboseLog("Completed aligning versions.")
 	return nil
 }
 
@@ -87,7 +86,8 @@ func (a *Aligner) collectVersions(path string) error {
 		// Check if the file should be ignored
 		relPath, err := filepath.Rel(".", filePath)
 		if err != nil {
-			return err
+			// If we can't make a relative path, just use the absolute path for ignore checks
+			relPath = filePath
 		}
 		if a.ignorer != nil && a.ignorer.MatchesPath(relPath) {
 			utils.VerboseLog("Ignoring file:", relPath)
@@ -112,7 +112,24 @@ func (a *Aligner) collectPythonVersions(filePath string) error {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
-	re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)==([0-9.]+)`)
+	re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)==([a-zA-Z0-9.*+!~_=<>-]+)`)
+
+	type versionInfo struct {
+		highestConcrete string
+		highestWildcard string
+	}
+	versionMap := make(map[string]*versionInfo)
+
+	isWildcard := func(v string) bool {
+		return strings.HasSuffix(v, ".*")
+	}
+
+	wildcardBase := func(v string) string {
+		if idx := strings.LastIndex(v, ".*"); idx != -1 {
+			return v[:idx]
+		}
+		return v
+	}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -123,26 +140,48 @@ func (a *Aligner) collectPythonVersions(filePath string) error {
 		matches := re.FindStringSubmatch(line)
 		if len(matches) == 3 {
 			pkg, version := matches[1], matches[2]
-			if existingVersion, ok := a.pythonVersions[pkg]; ok {
-				// Keep the higher version
-				v1, err := semv.NewVersion(version)
-				if err != nil {
-					utils.VerboseLog("Warning: Invalid version format:", version)
-					continue
-				}
-				v2, err := semv.NewVersion(existingVersion)
-				if err != nil {
-					utils.VerboseLog("Warning: Invalid version format:", existingVersion)
-					continue
-				}
-				if v1.GreaterThan(v2) {
-					a.pythonVersions[pkg] = version
+			if _, ok := versionMap[pkg]; !ok {
+				versionMap[pkg] = &versionInfo{}
+			}
+			vi := versionMap[pkg]
+			if isWildcard(version) {
+				// Track highest wildcard
+				if vi.highestWildcard == "" {
+					vi.highestWildcard = version
+				} else {
+					v1 := wildcardBase(version)
+					v2 := wildcardBase(vi.highestWildcard)
+					v1Sem, err1 := semv.NewVersion(v1 + ".0")
+					v2Sem, err2 := semv.NewVersion(v2 + ".0")
+					if err1 == nil && err2 == nil && v1Sem.GreaterThan(v2Sem) {
+						vi.highestWildcard = version
+					}
 				}
 			} else {
-				a.pythonVersions[pkg] = version
+				// Track highest concrete
+				if vi.highestConcrete == "" {
+					vi.highestConcrete = version
+				} else {
+					v1, err1 := semv.NewVersion(version)
+					v2, err2 := semv.NewVersion(vi.highestConcrete)
+					if err1 == nil && err2 == nil && v1.GreaterThan(v2) {
+						vi.highestConcrete = version
+					}
+				}
 			}
 		}
 	}
+
+	// After collecting, set a.pythonVersions to the highest wildcard if present, else highest concrete
+	for pkg, vi := range versionMap {
+		if vi.highestWildcard != "" {
+			a.pythonVersions[pkg] = vi.highestWildcard
+		} else if vi.highestConcrete != "" {
+			a.pythonVersions[pkg] = vi.highestConcrete
+		}
+	}
+
+	fmt.Println("pythonVersions for alignment:", a.pythonVersions)
 	return scanner.Err()
 }
 
@@ -203,7 +242,8 @@ func (a *Aligner) alignVersions(path string) error {
 		// Check if the file should be ignored
 		relPath, err := filepath.Rel(".", filePath)
 		if err != nil {
-			return err
+			// If we can't make a relative path, just use the absolute path for ignore checks
+			relPath = filePath
 		}
 		if a.ignorer != nil && a.ignorer.MatchesPath(relPath) {
 			utils.VerboseLog("Ignoring file:", relPath)
@@ -221,6 +261,7 @@ func (a *Aligner) alignVersions(path string) error {
 }
 
 func (a *Aligner) alignPythonFile(filePath string) error {
+	fmt.Println("alignPythonFile called for:", filePath)
 	utils.VerboseLog("Aligning Python file:", filePath)
 
 	input, err := os.ReadFile(filePath)
@@ -230,7 +271,7 @@ func (a *Aligner) alignPythonFile(filePath string) error {
 
 	lines := strings.Split(string(input), "\n")
 	updated := false
-	re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)([<>=!~]+.*)`)
+	re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)([<>=!~]+.*)?$`)
 
 	for i, line := range lines {
 		if line == "" || strings.HasPrefix(line, "#") {

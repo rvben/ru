@@ -106,7 +106,13 @@ package2>=2.0.0,<3.0.0
 package3==3.0.0
 `
 	if string(updatedContent) != expectedContent {
-		t.Errorf("Updated content does not match expected.\nExpected:\n%s\nGot:\n%s", expectedContent, string(updatedContent))
+		t.Errorf("Updated content does not match expected.\nExpected:\n%q\nGot:\n%q\nExpected bytes: %v\nGot bytes: %v", expectedContent, string(updatedContent), []byte(expectedContent), []byte(updatedContent))
+	}
+	// Also check after trimming trailing whitespace/newlines
+	trimmedExpected := strings.TrimSpace(expectedContent)
+	trimmedActual := strings.TrimSpace(string(updatedContent))
+	if trimmedExpected != trimmedActual {
+		t.Errorf("Trimmed content does not match.\nExpected:\n%q\nGot:\n%q", trimmedExpected, trimmedActual)
 	}
 
 	// Check the update statistics
@@ -595,5 +601,132 @@ django = "^4.2.0"
 				}
 			}
 		})
+	}
+}
+
+func TestAlignerWildcardVersion(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "aligner-wildcard-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create three subdirectories, each with a requirements.txt
+	dirs := []string{"a", "b", "c"}
+	contents := []string{"rdflib==7.0.*\n", "rdflib==7.1.0\n", "rdflib==7.1.*\n"}
+	files := make([]string, 3)
+	for i, d := range dirs {
+		dirPath := filepath.Join(tmpDir, d)
+		if err := os.Mkdir(dirPath, 0755); err != nil {
+			t.Fatalf("Failed to create dir %s: %v", dirPath, err)
+		}
+		filePath := filepath.Join(dirPath, "requirements.txt")
+		if err := os.WriteFile(filePath, []byte(contents[i]), 0644); err != nil {
+			t.Fatalf("Failed to write %s: %v", filePath, err)
+		}
+		files[i] = filePath
+	}
+
+	aligner := NewAligner()
+	if err := aligner.collectVersions(tmpDir); err != nil {
+		t.Fatalf("collectVersions failed: %v", err)
+	}
+	if err := aligner.alignVersions(tmpDir); err != nil {
+		t.Fatalf("alignVersions failed: %v", err)
+	}
+
+	for _, f := range files {
+		updated, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", f, err)
+		}
+		str := string(updated)
+		if strings.Contains(str, "==7.1.") && !strings.Contains(str, "==7.1.*") {
+			t.Errorf("Invalid version '==7.1.' found in %s: %q", f, str)
+		}
+		if !strings.Contains(str, "==7.1.0") && !strings.Contains(str, "==7.0.*") && !strings.Contains(str, "==7.1.*") {
+			t.Errorf("Expected wildcard or valid version in %s, got: %q", f, str)
+		}
+	}
+
+	// All files should be aligned to the highest valid version, which is 7.1.*
+	for _, f := range files {
+		updated, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", f, err)
+		}
+		str := string(updated)
+		if !strings.Contains(str, "==7.1.*") {
+			t.Errorf("Expected all files to be aligned to '==7.1.*', got: %q in %s", str, f)
+		}
+	}
+}
+
+func TestDryRunSummaryOutput(t *testing.T) {
+	// Create a temporary directory for the test
+	tempDir, err := ioutil.TempDir("", "test-dryrun")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Change to the temp directory for the test
+	currentDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+	defer os.Chdir(currentDir)
+
+	// Create a test requirements file
+	testFile := "requirements.txt"
+	content := `package1==1.0.0\npackage2\n`
+	if err := ioutil.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	// Set up the updater in dryRun mode
+	updater := New(true, false, []string{"."})
+	updater.dryRun = true
+	updater.pypi = &MockPackageManager{
+		getLatestVersionFunc: func(pkg string) (string, error) {
+			if pkg == "package1" {
+				return "1.1.0", nil
+			}
+			if pkg == "package2" {
+				return "2.0.0", nil
+			}
+			return "", fmt.Errorf("package %s not found", pkg)
+		},
+	}
+
+	// Capture stdout using os.Pipe
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Failed to create pipe: %v", err)
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+
+	err = updater.ProcessDirectory(".")
+	if err != nil {
+		w.Close()
+		os.Stdout = stdout
+		t.Fatalf("ProcessDirectory failed: %v", err)
+	}
+	updater.Run()
+
+	w.Close()
+	os.Stdout = stdout
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	r.Close()
+
+	output := buf.String()
+	if !strings.Contains(output, "Would update") && !strings.Contains(output, "No updates would be made") {
+		t.Errorf("Dry run summary output missing or incorrect. Got: %q", output)
 	}
 }
