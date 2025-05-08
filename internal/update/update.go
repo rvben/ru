@@ -1255,3 +1255,8 @@ func findNextSection(content string, start int) int {
 	// This is a stub: always return -1 (no next section found)
 	return -1
 }
+
+// SetDryRun sets the dryRun mode for the updater.
+func (u *Updater) SetDryRun(dryRun bool) {
+	u.dryRun = dryRun
+}
