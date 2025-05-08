@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,7 +42,7 @@ func NewUpdater(pypi packagemanager.PackageManager) *Updater {
 
 func TestUpdateRequirementsFile(t *testing.T) {
 	// Create a temporary directory for the test
-	tempDir, err := ioutil.TempDir("", "test")
+	tempDir, err := os.MkdirTemp("", "test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
@@ -65,7 +64,7 @@ func TestUpdateRequirementsFile(t *testing.T) {
 package2>=2.0.0,<3.0.0
 package3
 `
-	err = ioutil.WriteFile(testFile, []byte(content), 0644)
+	err = os.WriteFile(testFile, []byte(content), 0644)
 	if err != nil {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
@@ -95,7 +94,7 @@ package3
 	}
 
 	// Read the updated file
-	updatedContent, err := ioutil.ReadFile(testFile)
+	updatedContent, err := os.ReadFile(testFile)
 	if err != nil {
 		t.Fatalf("Failed to read updated file: %v", err)
 	}
@@ -664,7 +663,7 @@ func TestAlignerWildcardVersion(t *testing.T) {
 
 func TestDryRunSummaryOutput(t *testing.T) {
 	// Create a temporary directory for the test
-	tempDir, err := ioutil.TempDir("", "test-dryrun")
+	tempDir, err := os.MkdirTemp("", "test-dryrun")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
@@ -683,7 +682,7 @@ func TestDryRunSummaryOutput(t *testing.T) {
 	// Create a test requirements file
 	testFile := "requirements.txt"
 	content := `package1==1.0.0\npackage2\n`
-	if err := ioutil.WriteFile(testFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
