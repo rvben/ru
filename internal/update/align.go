@@ -53,15 +53,15 @@ func (a *Aligner) Run() error {
 	// Print summary
 	if a.filesUpdated > 0 {
 		if a.filesUpdated == 1 {
-			fmt.Printf("%d file aligned and %d modules updated\n", a.filesUpdated, a.modulesUpdated)
+			utils.Success("%d file aligned and %d modules updated", a.filesUpdated, a.modulesUpdated)
 		} else {
-			fmt.Printf("%d files aligned and %d modules updated\n", a.filesUpdated, a.modulesUpdated)
+			utils.Success("%d files aligned and %d modules updated", a.filesUpdated, a.modulesUpdated)
 		}
 	} else {
 		if a.filesUnchanged == 1 {
-			fmt.Printf("%d file left unchanged\n", a.filesUnchanged)
+			utils.Info("align", "%d file left unchanged", a.filesUnchanged)
 		} else {
-			fmt.Printf("%d files left unchanged\n", a.filesUnchanged)
+			utils.Info("align", "%d files left unchanged", a.filesUnchanged)
 		}
 	}
 
@@ -172,16 +172,15 @@ func (a *Aligner) collectPythonVersions(filePath string) error {
 		}
 	}
 
-	// After collecting, set a.pythonVersions to the highest wildcard if present, else highest concrete
+	// After collecting, set a.pythonVersions to the highest concrete if present, else highest wildcard
 	for pkg, vi := range versionMap {
-		if vi.highestWildcard != "" {
-			a.pythonVersions[pkg] = vi.highestWildcard
-		} else if vi.highestConcrete != "" {
+		if vi.highestConcrete != "" {
 			a.pythonVersions[pkg] = vi.highestConcrete
+		} else if vi.highestWildcard != "" {
+			a.pythonVersions[pkg] = vi.highestWildcard
 		}
 	}
 
-	fmt.Println("pythonVersions for alignment:", a.pythonVersions)
 	return scanner.Err()
 }
 
@@ -201,24 +200,15 @@ func (a *Aligner) collectNPMVersions(filePath string) error {
 
 	for name, version := range pkg.Dependencies {
 		// Strip any semver operators
-		version = strings.TrimLeft(version, "^~>=<")
+		cleanVersion := strings.TrimLeft(version, "^~>=<")
 		if existingVersion, ok := a.npmVersions[name]; ok {
-			// Keep the higher version
-			v1, err := semv.NewVersion(version)
-			if err != nil {
-				utils.VerboseLog("Warning: Invalid version format:", version)
-				continue
-			}
-			v2, err := semv.NewVersion(existingVersion)
-			if err != nil {
-				utils.VerboseLog("Warning: Invalid version format:", existingVersion)
-				continue
-			}
-			if v1.GreaterThan(v2) {
-				a.npmVersions[name] = version
+			v1, err1 := semv.NewVersion(cleanVersion)
+			v2, err2 := semv.NewVersion(existingVersion)
+			if err1 == nil && err2 == nil && v1.GreaterThan(v2) {
+				a.npmVersions[name] = cleanVersion
 			}
 		} else {
-			a.npmVersions[name] = version
+			a.npmVersions[name] = cleanVersion
 		}
 	}
 	return nil
@@ -261,7 +251,6 @@ func (a *Aligner) alignVersions(path string) error {
 }
 
 func (a *Aligner) alignPythonFile(filePath string) error {
-	fmt.Println("alignPythonFile called for:", filePath)
 	utils.VerboseLog("Aligning Python file:", filePath)
 
 	input, err := os.ReadFile(filePath)
@@ -317,22 +306,17 @@ func (a *Aligner) alignNPMFile(filePath string) error {
 	}
 
 	updated := false
-	for name, currentVersion := range pkg.Dependencies {
-		if version, ok := a.npmVersions[name]; ok {
-			// Preserve the version prefix (^ or ~)
-			prefix := ""
-			if strings.HasPrefix(currentVersion, "^") {
-				prefix = "^"
-			} else if strings.HasPrefix(currentVersion, "~") {
-				prefix = "~"
+	for name, version := range pkg.Dependencies {
+		// Strip any semver operators
+		cleanVersion := strings.TrimLeft(version, "^~>=<")
+		if existingVersion, ok := a.npmVersions[name]; ok {
+			v1, err1 := semv.NewVersion(cleanVersion)
+			v2, err2 := semv.NewVersion(existingVersion)
+			if err1 == nil && err2 == nil && v1.GreaterThan(v2) {
+				a.npmVersions[name] = cleanVersion
 			}
-
-			newVersion := prefix + version
-			if newVersion != currentVersion {
-				pkg.Dependencies[name] = newVersion
-				updated = true
-				a.modulesUpdated++
-			}
+		} else {
+			a.npmVersions[name] = cleanVersion
 		}
 	}
 

@@ -15,11 +15,13 @@ A tool for updating Python and Node.js package dependencies. RU automatically up
 
 ## Installation
 
+### Install via Go (recommended)
 ```bash
-# Install from binary releases
-curl -s https://raw.githubusercontent.com/rvben/ru/main/install.sh | bash
+go install github.com/rvben/ru/cmd/ru@v0.1.93
+```
 
-# Or build from source
+### Build from source
+```bash
 go build -o ru ./cmd/ru
 ```
 
@@ -78,7 +80,7 @@ RU supports custom package indexes from multiple sources with the following prec
      name = "custom"
      url = "https://my-custom-index.example.com"
      default = true  # Makes this the default source
-     
+
      [[tool.uv.index]]
      name = "secondary"
      url = "https://secondary-index.example.com"
