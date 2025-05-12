@@ -48,9 +48,9 @@ func (a *Aligner) Run() error {
 
 	// Verbose: print the list of files to process
 	if utils.IsVerbose() {
-		utils.VerboseLog("Files to process:")
+		utils.Debug("align", "Files to process:")
 		for _, f := range a.filesToProcess {
-			utils.VerboseLog("  ", f)
+			utils.Debug("align", "  %s", f)
 		}
 	}
 
@@ -62,15 +62,15 @@ func (a *Aligner) Run() error {
 	// Verbose: print the highest versions found
 	if utils.IsVerbose() {
 		if len(a.pythonVersions) > 0 {
-			utils.VerboseLog("Highest Python package versions found:")
+			utils.Debug("align", "Highest Python package versions found:")
 			for pkg, ver := range a.pythonVersions {
-				utils.VerboseLog("  ", pkg, "->", ver)
+				utils.Debug("align", "  %s -> %s", pkg, ver)
 			}
 		}
 		if len(a.npmVersions) > 0 {
-			utils.VerboseLog("Highest NPM package versions found:")
+			utils.Debug("align", "Highest NPM package versions found:")
 			for pkg, ver := range a.npmVersions {
-				utils.VerboseLog("  ", pkg, "->", ver)
+				utils.Debug("align", "  %s -> %s", pkg, ver)
 			}
 		}
 	}
@@ -106,7 +106,7 @@ func (a *Aligner) collectFilesToProcess(path string) error {
 		}
 		if info.IsDir() {
 			if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
-				utils.VerboseLog("Ignoring directory:", filePath)
+				utils.Debug("align", "Ignoring directory: %s", filePath)
 				return filepath.SkipDir
 			}
 			return nil
@@ -116,7 +116,7 @@ func (a *Aligner) collectFilesToProcess(path string) error {
 			relPath = filePath
 		}
 		if a.ignorer != nil && a.ignorer.MatchesPath(relPath) {
-			utils.VerboseLog("Ignoring file:", relPath)
+			utils.Debug("align", "Ignoring file: %s", relPath)
 			return nil
 		}
 		switch {
@@ -205,12 +205,18 @@ func (a *Aligner) collectPythonVersions(filePath string) error {
 				// Track highest wildcard
 				if vi.highestWildcard == "" {
 					vi.highestWildcard = version
+					utils.Debug("align", "[align] Set initial highest wildcard for %s: %s", pkg, version)
 				} else {
 					v1 := wildcardBase(version)
 					v2 := wildcardBase(vi.highestWildcard)
 					v1Sem, err1 := semv.NewVersion(v1 + ".0")
 					v2Sem, err2 := semv.NewVersion(v2 + ".0")
+					utils.Debug("align", "[align] Comparing wildcards for %s: %s vs %s", pkg, v1, v2)
+					if err1 != nil || err2 != nil {
+						utils.Debug("align", "[align] Could not parse wildcard version(s): %s %s err1: %v err2: %v", v1, v2, err1, err2)
+					}
 					if err1 == nil && err2 == nil && v1Sem.GreaterThan(v2Sem) {
+						utils.Debug("align", "[align] Updating highest wildcard for %s to %s", pkg, version)
 						vi.highestWildcard = version
 					}
 				}
@@ -218,14 +224,22 @@ func (a *Aligner) collectPythonVersions(filePath string) error {
 				// Track highest concrete
 				if vi.highestConcrete == "" {
 					vi.highestConcrete = version
+					utils.Debug("align", "[align] Set initial highest concrete for %s: %s", pkg, version)
 				} else {
 					v1, err1 := semv.NewVersion(version)
 					v2, err2 := semv.NewVersion(vi.highestConcrete)
+					utils.Debug("align", "[align] Comparing concretes for %s: %s vs %s", pkg, version, vi.highestConcrete)
+					if err1 != nil || err2 != nil {
+						utils.Debug("align", "[align] Could not parse concrete version(s): %s %s err1: %v err2: %v", version, vi.highestConcrete, err1, err2)
+					}
 					if err1 == nil && err2 == nil && v1.GreaterThan(v2) {
+						utils.Debug("align", "[align] Updating highest concrete for %s to %s", pkg, version)
 						vi.highestConcrete = version
 					}
 				}
 			}
+		} else {
+			utils.Debug("align", "[align] Skipped line (no match): %s", line)
 		}
 	}
 
@@ -272,7 +286,7 @@ func (a *Aligner) collectNPMVersions(filePath string) error {
 }
 
 func (a *Aligner) alignPythonFile(filePath string) error {
-	utils.VerboseLog("Aligning Python file:", filePath)
+	utils.Debug("align", "Aligning Python file: %s", filePath)
 
 	input, err := os.ReadFile(filePath)
 	if err != nil {
@@ -311,7 +325,7 @@ func (a *Aligner) alignPythonFile(filePath string) error {
 }
 
 func (a *Aligner) alignNPMFile(filePath string) error {
-	utils.VerboseLog("Aligning NPM file:", filePath)
+	utils.Debug("align", "Aligning NPM file: %s", filePath)
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {

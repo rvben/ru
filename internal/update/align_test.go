@@ -31,11 +31,14 @@ func TestAlignerWildcardVersion(t *testing.T) {
 	}
 
 	aligner := NewAligner()
-	if err := aligner.collectVersions(tmpDir); err != nil {
-		t.Fatalf("collectVersions failed: %v", err)
+	if err := aligner.collectFilesToProcess(tmpDir); err != nil {
+		t.Fatalf("collectFilesToProcess failed: %v", err)
 	}
-	if err := aligner.alignVersions(tmpDir); err != nil {
-		t.Fatalf("alignVersions failed: %v", err)
+	if err := aligner.collectVersionsFromFiles(); err != nil {
+		t.Fatalf("collectVersionsFromFiles failed: %v", err)
+	}
+	if err := aligner.alignVersionsInFiles(); err != nil {
+		t.Fatalf("alignVersionsInFiles failed: %v", err)
 	}
 
 	for _, f := range files {
@@ -95,11 +98,14 @@ func TestAlignerComplexVersions(t *testing.T) {
 	}
 
 	aligner := NewAligner()
-	if err := aligner.collectVersions(tmpDir); err != nil {
-		t.Fatalf("collectVersions failed: %v", err)
+	if err := aligner.collectFilesToProcess(tmpDir); err != nil {
+		t.Fatalf("collectFilesToProcess failed: %v", err)
 	}
-	if err := aligner.alignVersions(tmpDir); err != nil {
-		t.Fatalf("alignVersions failed: %v", err)
+	if err := aligner.collectVersionsFromFiles(); err != nil {
+		t.Fatalf("collectVersionsFromFiles failed: %v", err)
+	}
+	if err := aligner.alignVersionsInFiles(); err != nil {
+		t.Fatalf("alignVersionsInFiles failed: %v", err)
 	}
 
 	// Expected highest versions:
@@ -125,6 +131,56 @@ func TestAlignerComplexVersions(t *testing.T) {
 		}
 		if !strings.Contains(str, "qux==4.2.*") {
 			t.Errorf("Expected qux==4.2.* in %s, got: %q", f, str)
+		}
+	}
+}
+
+func TestAlignerUrllib3VersionOrder(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "aligner-urllib3-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Two files, one with a lower version, one with a higher version
+	files := []struct {
+		dir, content string
+	}{
+		{"a", "urllib3==1.26.15\n"},
+		{"b", "urllib3==2.2.3\n"},
+	}
+	paths := make([]string, len(files))
+	for i, f := range files {
+		dirPath := filepath.Join(tmpDir, f.dir)
+		if err := os.Mkdir(dirPath, 0755); err != nil {
+			t.Fatalf("Failed to create dir %s: %v", dirPath, err)
+		}
+		filePath := filepath.Join(dirPath, "requirements.txt")
+		if err := os.WriteFile(filePath, []byte(f.content), 0644); err != nil {
+			t.Fatalf("Failed to write %s: %v", filePath, err)
+		}
+		paths[i] = filePath
+	}
+
+	aligner := NewAligner()
+	if err := aligner.collectFilesToProcess(tmpDir); err != nil {
+		t.Fatalf("collectFilesToProcess failed: %v", err)
+	}
+	if err := aligner.collectVersionsFromFiles(); err != nil {
+		t.Fatalf("collectVersionsFromFiles failed: %v", err)
+	}
+	if err := aligner.alignVersionsInFiles(); err != nil {
+		t.Fatalf("alignVersionsInFiles failed: %v", err)
+	}
+
+	for _, f := range paths {
+		updated, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", f, err)
+		}
+		str := string(updated)
+		if !strings.Contains(str, "urllib3==2.2.3") {
+			t.Errorf("Expected urllib3==2.2.3 in %s, got: %q", f, str)
 		}
 	}
 }
