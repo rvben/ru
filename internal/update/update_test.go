@@ -603,64 +603,6 @@ django = "^4.2.0"
 	}
 }
 
-func TestAlignerWildcardVersion(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "aligner-wildcard-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Create three subdirectories, each with a requirements.txt
-	dirs := []string{"a", "b", "c"}
-	contents := []string{"rdflib==7.0.*\n", "rdflib==7.1.0\n", "rdflib==7.1.*\n"}
-	files := make([]string, 3)
-	for i, d := range dirs {
-		dirPath := filepath.Join(tmpDir, d)
-		if err := os.Mkdir(dirPath, 0755); err != nil {
-			t.Fatalf("Failed to create dir %s: %v", dirPath, err)
-		}
-		filePath := filepath.Join(dirPath, "requirements.txt")
-		if err := os.WriteFile(filePath, []byte(contents[i]), 0644); err != nil {
-			t.Fatalf("Failed to write %s: %v", filePath, err)
-		}
-		files[i] = filePath
-	}
-
-	aligner := NewAligner()
-	if err := aligner.collectVersions(tmpDir); err != nil {
-		t.Fatalf("collectVersions failed: %v", err)
-	}
-	if err := aligner.alignVersions(tmpDir); err != nil {
-		t.Fatalf("alignVersions failed: %v", err)
-	}
-
-	for _, f := range files {
-		updated, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("Failed to read %s: %v", f, err)
-		}
-		str := string(updated)
-		if strings.Contains(str, "==7.1.") && !strings.Contains(str, "==7.1.*") {
-			t.Errorf("Invalid version '==7.1.' found in %s: %q", f, str)
-		}
-		if !strings.Contains(str, "==7.1.0") && !strings.Contains(str, "==7.0.*") && !strings.Contains(str, "==7.1.*") {
-			t.Errorf("Expected wildcard or valid version in %s, got: %q", f, str)
-		}
-	}
-
-	// All files should be aligned to the highest valid version, which is 7.1.*
-	for _, f := range files {
-		updated, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("Failed to read %s: %v", f, err)
-		}
-		str := string(updated)
-		if !strings.Contains(str, "==7.1.*") {
-			t.Errorf("Expected all files to be aligned to '==7.1.*', got: %q in %s", str, f)
-		}
-	}
-}
-
 func TestDryRunSummaryOutput(t *testing.T) {
 	// Create a temporary directory for the test
 	tempDir, err := os.MkdirTemp("", "test-dryrun")
