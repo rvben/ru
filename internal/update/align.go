@@ -21,6 +21,7 @@ type Aligner struct {
 	filesUnchanged int
 	modulesUpdated int
 	ignorer        *ignore.GitIgnore
+	filesToProcess []string
 }
 
 func NewAligner() *Aligner {
@@ -40,13 +41,42 @@ func (a *Aligner) Run() error {
 		}
 	}
 
-	// First pass: collect all versions
-	if err := a.collectVersions("."); err != nil {
+	// First: collect the list of files to process
+	if err := a.collectFilesToProcess("."); err != nil {
 		return err
 	}
 
-	// Second pass: align versions
-	if err := a.alignVersions("."); err != nil {
+	// Verbose: print the list of files to process
+	if utils.IsVerbose() {
+		utils.VerboseLog("Files to process:")
+		for _, f := range a.filesToProcess {
+			utils.VerboseLog("  ", f)
+		}
+	}
+
+	// Second: collect all versions from these files
+	if err := a.collectVersionsFromFiles(); err != nil {
+		return err
+	}
+
+	// Verbose: print the highest versions found
+	if utils.IsVerbose() {
+		if len(a.pythonVersions) > 0 {
+			utils.VerboseLog("Highest Python package versions found:")
+			for pkg, ver := range a.pythonVersions {
+				utils.VerboseLog("  ", pkg, "->", ver)
+			}
+		}
+		if len(a.npmVersions) > 0 {
+			utils.VerboseLog("Highest NPM package versions found:")
+			for pkg, ver := range a.npmVersions {
+				utils.VerboseLog("  ", pkg, "->", ver)
+			}
+		}
+	}
+
+	// Third: align versions in these files
+	if err := a.alignVersionsInFiles(); err != nil {
 		return err
 	}
 
@@ -68,13 +98,12 @@ func (a *Aligner) Run() error {
 	return nil
 }
 
-func (a *Aligner) collectVersions(path string) error {
+func (a *Aligner) collectFilesToProcess(path string) error {
+	a.filesToProcess = nil
 	return filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-
-		// Skip directories that are in .gitignore
 		if info.IsDir() {
 			if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
 				utils.VerboseLog("Ignoring directory:", filePath)
@@ -82,26 +111,54 @@ func (a *Aligner) collectVersions(path string) error {
 			}
 			return nil
 		}
-
-		// Check if the file should be ignored
 		relPath, err := filepath.Rel(".", filePath)
 		if err != nil {
-			// If we can't make a relative path, just use the absolute path for ignore checks
 			relPath = filePath
 		}
 		if a.ignorer != nil && a.ignorer.MatchesPath(relPath) {
 			utils.VerboseLog("Ignoring file:", relPath)
 			return nil
 		}
-
 		switch {
 		case strings.HasSuffix(filePath, "requirements.txt"):
-			return a.collectPythonVersions(filePath)
+			a.filesToProcess = append(a.filesToProcess, filePath)
 		case filepath.Base(filePath) == "package.json":
-			return a.collectNPMVersions(filePath)
+			a.filesToProcess = append(a.filesToProcess, filePath)
 		}
 		return nil
 	})
+}
+
+func (a *Aligner) collectVersionsFromFiles() error {
+	for _, filePath := range a.filesToProcess {
+		switch {
+		case strings.HasSuffix(filePath, "requirements.txt"):
+			if err := a.collectPythonVersions(filePath); err != nil {
+				return err
+			}
+		case filepath.Base(filePath) == "package.json":
+			if err := a.collectNPMVersions(filePath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (a *Aligner) alignVersionsInFiles() error {
+	for _, filePath := range a.filesToProcess {
+		switch {
+		case strings.HasSuffix(filePath, "requirements.txt"):
+			if err := a.alignPythonFile(filePath); err != nil {
+				return err
+			}
+		case filepath.Base(filePath) == "package.json":
+			if err := a.alignNPMFile(filePath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (a *Aligner) collectPythonVersions(filePath string) error {
@@ -212,42 +269,6 @@ func (a *Aligner) collectNPMVersions(filePath string) error {
 		}
 	}
 	return nil
-}
-
-func (a *Aligner) alignVersions(path string) error {
-	return filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip directories that are in .gitignore
-		if info.IsDir() {
-			if a.ignorer != nil && a.ignorer.MatchesPath(filePath) {
-				utils.VerboseLog("Ignoring directory:", filePath)
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Check if the file should be ignored
-		relPath, err := filepath.Rel(".", filePath)
-		if err != nil {
-			// If we can't make a relative path, just use the absolute path for ignore checks
-			relPath = filePath
-		}
-		if a.ignorer != nil && a.ignorer.MatchesPath(relPath) {
-			utils.VerboseLog("Ignoring file:", relPath)
-			return nil
-		}
-
-		switch {
-		case strings.HasSuffix(filePath, "requirements.txt"):
-			return a.alignPythonFile(filePath)
-		case filepath.Base(filePath) == "package.json":
-			return a.alignNPMFile(filePath)
-		}
-		return nil
-	})
 }
 
 func (a *Aligner) alignPythonFile(filePath string) error {
