@@ -14,6 +14,11 @@ import (
 	ignore "github.com/sabhiram/go-gitignore"
 )
 
+type versionInfo struct {
+	highestConcrete string
+	highestWildcard string
+}
+
 type Aligner struct {
 	pythonVersions map[string]string
 	npmVersions    map[string]string
@@ -130,10 +135,13 @@ func (a *Aligner) collectFilesToProcess(path string) error {
 }
 
 func (a *Aligner) collectVersionsFromFiles() error {
+	// Global version map for all Python packages
+	versionMap := make(map[string]*versionInfo)
+
 	for _, filePath := range a.filesToProcess {
 		switch {
 		case strings.HasSuffix(filePath, "requirements.txt"):
-			if err := a.collectPythonVersions(filePath); err != nil {
+			if err := a.collectPythonVersions(filePath, versionMap); err != nil {
 				return err
 			}
 		case filepath.Base(filePath) == "package.json":
@@ -142,6 +150,34 @@ func (a *Aligner) collectVersionsFromFiles() error {
 			}
 		}
 	}
+
+	// After collecting, set a.pythonVersions to the true highest version (wildcard or concrete)
+	for pkg, vi := range versionMap {
+		if vi.highestWildcard != "" && vi.highestConcrete != "" {
+			wildBase := vi.highestWildcard[:len(vi.highestWildcard)-2] // remove .*
+			wildSem, errWild := semv.NewVersion(wildBase + ".0")       // treat as patch zero
+			conSem, errCon := semv.NewVersion(vi.highestConcrete)
+			if errWild == nil && errCon == nil {
+				// If major.minor match, prefer wildcard
+				if wildSem.Major() == conSem.Major() && wildSem.Minor() == conSem.Minor() {
+					a.pythonVersions[pkg] = vi.highestWildcard
+				} else if wildSem.GreaterThan(conSem) {
+					a.pythonVersions[pkg] = vi.highestWildcard
+				} else {
+					a.pythonVersions[pkg] = vi.highestConcrete
+				}
+			} else if errWild == nil {
+				a.pythonVersions[pkg] = vi.highestWildcard
+			} else {
+				a.pythonVersions[pkg] = vi.highestConcrete
+			}
+		} else if vi.highestWildcard != "" {
+			a.pythonVersions[pkg] = vi.highestWildcard
+		} else if vi.highestConcrete != "" {
+			a.pythonVersions[pkg] = vi.highestConcrete
+		}
+	}
+
 	return nil
 }
 
@@ -161,7 +197,7 @@ func (a *Aligner) alignVersionsInFiles() error {
 	return nil
 }
 
-func (a *Aligner) collectPythonVersions(filePath string) error {
+func (a *Aligner) collectPythonVersions(filePath string, versionMap map[string]*versionInfo) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -170,12 +206,6 @@ func (a *Aligner) collectPythonVersions(filePath string) error {
 
 	scanner := bufio.NewScanner(file)
 	re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)==([a-zA-Z0-9.*+!~_=<>-]+)`)
-
-	type versionInfo struct {
-		highestConcrete string
-		highestWildcard string
-	}
-	versionMap := make(map[string]*versionInfo)
 
 	isWildcard := func(v string) bool {
 		return strings.HasSuffix(v, ".*")
@@ -240,15 +270,6 @@ func (a *Aligner) collectPythonVersions(filePath string) error {
 			}
 		} else {
 			utils.Debug("align", "[align] Skipped line (no match): %s", line)
-		}
-	}
-
-	// After collecting, set a.pythonVersions to the highest concrete if present, else highest wildcard
-	for pkg, vi := range versionMap {
-		if vi.highestConcrete != "" {
-			a.pythonVersions[pkg] = vi.highestConcrete
-		} else if vi.highestWildcard != "" {
-			a.pythonVersions[pkg] = vi.highestWildcard
 		}
 	}
 

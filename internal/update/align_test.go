@@ -55,15 +55,15 @@ func TestAlignerWildcardVersion(t *testing.T) {
 		}
 	}
 
-	// All files should be aligned to the highest valid version, which is 7.1.*
+	// All files should be aligned to the highest valid version, which is 7.1.0 (concrete beats wildcard)
 	for _, f := range files {
 		updated, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("Failed to read %s: %v", f, err)
 		}
 		str := string(updated)
-		if !strings.Contains(str, "==7.1.*") {
-			t.Errorf("Expected all files to be aligned to '==7.1.*', got: %q in %s", str, f)
+		if !strings.Contains(str, "==7.1.0") {
+			t.Errorf("Expected all files to be aligned to '==7.1.0', got: %q in %s", str, f)
 		}
 	}
 }
