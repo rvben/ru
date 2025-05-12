@@ -1,6 +1,6 @@
 module github.com/rvben/ru
 
-go 1.23.0
+go 1.24.3
 
 require (
 	github.com/Masterminds/semver/v3 v3.2.1
@@ -11,4 +11,7 @@ require (
 	gopkg.in/ini.v1 v1.67.0
 )
 
-require github.com/BurntSushi/toml v1.4.0 // indirect
+require (
+	github.com/BurntSushi/toml v1.4.0 // indirect
+	github.com/rvben/pyver v0.0.0-20250512100402-d925e9a01588 // indirect
+)

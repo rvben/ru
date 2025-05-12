@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+func runAlignerTest(t *testing.T, tmpDir string, useWildcard bool) func(files []string, expected map[string]string) {
+	return func(files []string, expected map[string]string) {
+		aligner := NewAligner()
+		aligner.UseWildcard = useWildcard
+		if err := aligner.collectFilesToProcess(tmpDir); err != nil {
+			t.Fatalf("collectFilesToProcess failed: %v", err)
+		}
+		if err := aligner.collectVersionsFromFiles(); err != nil {
+			t.Fatalf("collectVersionsFromFiles failed: %v", err)
+		}
+		if err := aligner.alignVersionsInFiles(); err != nil {
+			t.Fatalf("alignVersionsInFiles failed: %v", err)
+		}
+		for _, f := range files {
+			updated, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatalf("Failed to read %s: %v", f, err)
+			}
+			str := string(updated)
+			for _, want := range expected {
+				if !strings.Contains(str, want) {
+					t.Errorf("Expected %s in %s, got: %q", want, f, str)
+				}
+			}
+		}
+	}
+}
+
 func TestAlignerWildcardVersion(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "aligner-wildcard-test")
 	if err != nil {
@@ -30,42 +58,10 @@ func TestAlignerWildcardVersion(t *testing.T) {
 		files[i] = filePath
 	}
 
-	aligner := NewAligner()
-	if err := aligner.collectFilesToProcess(tmpDir); err != nil {
-		t.Fatalf("collectFilesToProcess failed: %v", err)
-	}
-	if err := aligner.collectVersionsFromFiles(); err != nil {
-		t.Fatalf("collectVersionsFromFiles failed: %v", err)
-	}
-	if err := aligner.alignVersionsInFiles(); err != nil {
-		t.Fatalf("alignVersionsInFiles failed: %v", err)
-	}
-
-	for _, f := range files {
-		updated, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("Failed to read %s: %v", f, err)
-		}
-		str := string(updated)
-		if strings.Contains(str, "==7.1.") && !strings.Contains(str, "==7.1.*") {
-			t.Errorf("Invalid version '==7.1.' found in %s: %q", f, str)
-		}
-		if !strings.Contains(str, "==7.1.0") && !strings.Contains(str, "==7.0.*") && !strings.Contains(str, "==7.1.*") {
-			t.Errorf("Expected wildcard or valid version in %s, got: %q", f, str)
-		}
-	}
-
-	// All files should be aligned to the highest valid version, which is 7.1.* (wildcard preferred when major.minor match)
-	for _, f := range files {
-		updated, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("Failed to read %s: %v", f, err)
-		}
-		str := string(updated)
-		if !strings.Contains(str, "==7.1.*") {
-			t.Errorf("Expected all files to be aligned to '==7.1.*', got: %q in %s", str, f)
-		}
-	}
+	// Default: expect concrete version
+	runAlignerTest(t, tmpDir, false)(files, map[string]string{"rdflib": "==7.1.0"})
+	// Wildcard: expect wildcard
+	runAlignerTest(t, tmpDir, true)(files, map[string]string{"rdflib": "==7.1.*"})
 }
 
 func TestAlignerComplexVersions(t *testing.T) {
@@ -75,7 +71,6 @@ func TestAlignerComplexVersions(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create subdirectories with requirements.txt files containing complex version patterns
 	dirs := []string{"a", "b", "c", "d", "e"}
 	contents := []string{
 		"foo==1.0.0\nbar==2.0.0a1\nbaz==3.0.0.post1\nqux==4.0.*\n",
@@ -97,42 +92,20 @@ func TestAlignerComplexVersions(t *testing.T) {
 		files[i] = filePath
 	}
 
-	aligner := NewAligner()
-	if err := aligner.collectFilesToProcess(tmpDir); err != nil {
-		t.Fatalf("collectFilesToProcess failed: %v", err)
-	}
-	if err := aligner.collectVersionsFromFiles(); err != nil {
-		t.Fatalf("collectVersionsFromFiles failed: %v", err)
-	}
-	if err := aligner.alignVersionsInFiles(); err != nil {
-		t.Fatalf("alignVersionsInFiles failed: %v", err)
-	}
-
-	// Expected highest versions:
-	// foo: 1.2.0 (stable beats rc, a, etc.)
-	// bar: 2.0.0 (stable beats rc, a, b)
-	// baz: 3.1.0.post1 (post-release beats 3.1.0, 3.0.0.post2, 3.0.0.post1, 3.0.0)
-	// qux: 4.2.* (wildcard beats 4.2.0, 4.1.*, 4.1.0, 4.0.*)
-
-	for _, f := range files {
-		updated, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("Failed to read %s: %v", f, err)
-		}
-		str := string(updated)
-		if !strings.Contains(str, "foo==1.2.0") {
-			t.Errorf("Expected foo==1.2.0 in %s, got: %q", f, str)
-		}
-		if !strings.Contains(str, "bar==2.0.0") {
-			t.Errorf("Expected bar==2.0.0 in %s, got: %q", f, str)
-		}
-		if !strings.Contains(str, "baz==3.1.0.post1") {
-			t.Errorf("Expected baz==3.1.0.post1 in %s, got: %q", f, str)
-		}
-		if !strings.Contains(str, "qux==4.2.*") {
-			t.Errorf("Expected qux==4.2.* in %s, got: %q", f, str)
-		}
-	}
+	// Default: expect concrete versions
+	runAlignerTest(t, tmpDir, false)(files, map[string]string{
+		"foo": "foo==1.2.0",
+		"bar": "bar==2.0.0",
+		"baz": "baz==3.1.0.post1",
+		"qux": "qux==4.2.0",
+	})
+	// Wildcard: expect wildcards where present
+	runAlignerTest(t, tmpDir, true)(files, map[string]string{
+		"foo": "foo==1.2.0",
+		"bar": "bar==2.0.0",
+		"baz": "baz==3.1.0.post1",
+		"qux": "qux==4.2.*",
+	})
 }
 
 func TestAlignerUrllib3VersionOrder(t *testing.T) {
@@ -142,7 +115,6 @@ func TestAlignerUrllib3VersionOrder(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Two files, one with a lower version, one with a higher version
 	files := []struct {
 		dir, content string
 	}{
@@ -162,25 +134,8 @@ func TestAlignerUrllib3VersionOrder(t *testing.T) {
 		paths[i] = filePath
 	}
 
-	aligner := NewAligner()
-	if err := aligner.collectFilesToProcess(tmpDir); err != nil {
-		t.Fatalf("collectFilesToProcess failed: %v", err)
-	}
-	if err := aligner.collectVersionsFromFiles(); err != nil {
-		t.Fatalf("collectVersionsFromFiles failed: %v", err)
-	}
-	if err := aligner.alignVersionsInFiles(); err != nil {
-		t.Fatalf("alignVersionsInFiles failed: %v", err)
-	}
-
-	for _, f := range paths {
-		updated, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("Failed to read %s: %v", f, err)
-		}
-		str := string(updated)
-		if !strings.Contains(str, "urllib3==2.2.3") {
-			t.Errorf("Expected urllib3==2.2.3 in %s, got: %q", f, str)
-		}
-	}
+	// Default: expect highest concrete version
+	runAlignerTest(t, tmpDir, false)(paths, map[string]string{"urllib3": "urllib3==2.2.3"})
+	// Wildcard: expect highest concrete version (no wildcard present)
+	runAlignerTest(t, tmpDir, true)(paths, map[string]string{"urllib3": "urllib3==2.2.3"})
 }

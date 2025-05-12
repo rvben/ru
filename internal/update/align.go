@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	semv "github.com/Masterminds/semver/v3"
+	"github.com/rvben/pyver"
 	"github.com/rvben/ru/internal/utils"
 	ignore "github.com/sabhiram/go-gitignore"
 )
@@ -27,6 +28,7 @@ type Aligner struct {
 	modulesUpdated int
 	ignorer        *ignore.GitIgnore
 	filesToProcess []string
+	UseWildcard    bool // If true, prefer wildcards when aligning
 }
 
 func NewAligner() *Aligner {
@@ -37,6 +39,12 @@ func NewAligner() *Aligner {
 }
 
 func (a *Aligner) Run() error {
+	for _, arg := range os.Args {
+		if arg == "--wildcard" {
+			a.UseWildcard = true
+		}
+	}
+
 	// Load .gitignore file
 	ignoreFile := filepath.Join(".", ".gitignore")
 	if _, err := os.Stat(ignoreFile); err == nil {
@@ -138,10 +146,11 @@ func (a *Aligner) collectVersionsFromFiles() error {
 	// Global version map for all Python packages
 	versionMap := make(map[string]*versionInfo)
 
+	// First pass: scan all files and aggregate highest versions globally
 	for _, filePath := range a.filesToProcess {
 		switch {
 		case strings.HasSuffix(filePath, "requirements.txt"):
-			if err := a.collectPythonVersions(filePath, versionMap); err != nil {
+			if err := a.scanPythonVersions(filePath, versionMap); err != nil {
 				return err
 			}
 		case filepath.Base(filePath) == "package.json":
@@ -153,51 +162,19 @@ func (a *Aligner) collectVersionsFromFiles() error {
 
 	// After collecting, set a.pythonVersions to the true highest version (wildcard or concrete)
 	for pkg, vi := range versionMap {
-		if vi.highestWildcard != "" && vi.highestConcrete != "" {
-			wildBase := vi.highestWildcard[:len(vi.highestWildcard)-2] // remove .*
-			wildSem, errWild := semv.NewVersion(wildBase + ".0")       // treat as patch zero
-			conSem, errCon := semv.NewVersion(vi.highestConcrete)
-			if errWild == nil && errCon == nil {
-				// If major.minor match, prefer wildcard
-				if wildSem.Major() == conSem.Major() && wildSem.Minor() == conSem.Minor() {
-					a.pythonVersions[pkg] = vi.highestWildcard
-				} else if wildSem.GreaterThan(conSem) {
-					a.pythonVersions[pkg] = vi.highestWildcard
-				} else {
-					a.pythonVersions[pkg] = vi.highestConcrete
-				}
-			} else if errWild == nil {
-				a.pythonVersions[pkg] = vi.highestWildcard
-			} else {
-				a.pythonVersions[pkg] = vi.highestConcrete
-			}
-		} else if vi.highestWildcard != "" {
+		if a.UseWildcard && vi.highestWildcard != "" {
 			a.pythonVersions[pkg] = vi.highestWildcard
 		} else if vi.highestConcrete != "" {
 			a.pythonVersions[pkg] = vi.highestConcrete
+		} else if vi.highestWildcard != "" {
+			a.pythonVersions[pkg] = vi.highestWildcard
 		}
 	}
 
 	return nil
 }
 
-func (a *Aligner) alignVersionsInFiles() error {
-	for _, filePath := range a.filesToProcess {
-		switch {
-		case strings.HasSuffix(filePath, "requirements.txt"):
-			if err := a.alignPythonFile(filePath); err != nil {
-				return err
-			}
-		case filepath.Base(filePath) == "package.json":
-			if err := a.alignNPMFile(filePath); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (a *Aligner) collectPythonVersions(filePath string, versionMap map[string]*versionInfo) error {
+func (a *Aligner) scanPythonVersions(filePath string, versionMap map[string]*versionInfo) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -239,13 +216,13 @@ func (a *Aligner) collectPythonVersions(filePath string, versionMap map[string]*
 				} else {
 					v1 := wildcardBase(version)
 					v2 := wildcardBase(vi.highestWildcard)
-					v1Sem, err1 := semv.NewVersion(v1 + ".0")
-					v2Sem, err2 := semv.NewVersion(v2 + ".0")
+					v1Ver, err1 := pyver.Parse(v1 + ".0")
+					v2Ver, err2 := pyver.Parse(v2 + ".0")
 					utils.Debug("align", "[align] Comparing wildcards for %s: %s vs %s", pkg, v1, v2)
 					if err1 != nil || err2 != nil {
 						utils.Debug("align", "[align] Could not parse wildcard version(s): %s %s err1: %v err2: %v", v1, v2, err1, err2)
 					}
-					if err1 == nil && err2 == nil && v1Sem.GreaterThan(v2Sem) {
+					if err1 == nil && err2 == nil && pyver.Compare(v1Ver, v2Ver) > 0 {
 						utils.Debug("align", "[align] Updating highest wildcard for %s to %s", pkg, version)
 						vi.highestWildcard = version
 					}
@@ -256,13 +233,13 @@ func (a *Aligner) collectPythonVersions(filePath string, versionMap map[string]*
 					vi.highestConcrete = version
 					utils.Debug("align", "[align] Set initial highest concrete for %s: %s", pkg, version)
 				} else {
-					v1, err1 := semv.NewVersion(version)
-					v2, err2 := semv.NewVersion(vi.highestConcrete)
+					v1, err1 := pyver.Parse(version)
+					v2, err2 := pyver.Parse(vi.highestConcrete)
 					utils.Debug("align", "[align] Comparing concretes for %s: %s vs %s", pkg, version, vi.highestConcrete)
 					if err1 != nil || err2 != nil {
 						utils.Debug("align", "[align] Could not parse concrete version(s): %s %s err1: %v err2: %v", version, vi.highestConcrete, err1, err2)
 					}
-					if err1 == nil && err2 == nil && v1.GreaterThan(v2) {
+					if err1 == nil && err2 == nil && pyver.Compare(v1, v2) > 0 {
 						utils.Debug("align", "[align] Updating highest concrete for %s to %s", pkg, version)
 						vi.highestConcrete = version
 					}
@@ -306,6 +283,22 @@ func (a *Aligner) collectNPMVersions(filePath string) error {
 	return nil
 }
 
+func (a *Aligner) alignVersionsInFiles() error {
+	for _, filePath := range a.filesToProcess {
+		switch {
+		case strings.HasSuffix(filePath, "requirements.txt"):
+			if err := a.alignPythonFile(filePath); err != nil {
+				return err
+			}
+		case filepath.Base(filePath) == "package.json":
+			if err := a.alignNPMFile(filePath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (a *Aligner) alignPythonFile(filePath string) error {
 	utils.Debug("align", "Aligning Python file: %s", filePath)
 
@@ -316,7 +309,8 @@ func (a *Aligner) alignPythonFile(filePath string) error {
 
 	lines := strings.Split(string(input), "\n")
 	updated := false
-	re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)([<>=!~]+.*)?$`)
+	// Match any line that starts with a package name (alphanumeric, dash, underscore, dot), possibly followed by any constraint
+	re := regexp.MustCompile(`^([a-zA-Z0-9-_.]+)([<>=!~].*)?$`)
 
 	for i, line := range lines {
 		if line == "" || strings.HasPrefix(line, "#") {

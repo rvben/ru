@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/rvben/pyver"
 	"github.com/rvben/ru/internal/packagemanager"
 	"github.com/rvben/ru/internal/packagemanager/npm"
 	"github.com/rvben/ru/internal/packagemanager/pypi"
@@ -474,8 +475,8 @@ func (u *Updater) checkVersionConstraints(latestVerStr, versionConstraints strin
 	}
 
 	// Parse the latest version
-	latestVer := utils.ParseVersion(latestVerStr)
-	if !latestVer.IsValid {
+	latestVer, err := pyver.Parse(latestVerStr)
+	if err != nil {
 		return false, fmt.Errorf("invalid latest version: %s", latestVerStr)
 	}
 
@@ -489,7 +490,7 @@ func (u *Updater) checkVersionConstraints(latestVerStr, versionConstraints strin
 		validForAll := true
 		for _, part := range parts {
 			part = strings.TrimSpace(part)
-			if !latestVer.IsCompatible(part) {
+			if !pyverCompatible(latestVer, part) {
 				validForAll = false
 				break
 			}
@@ -499,14 +500,11 @@ func (u *Updater) checkVersionConstraints(latestVerStr, versionConstraints strin
 	} else if strings.HasPrefix(versionConstraints, "==") {
 		// Handle equality constraint
 		currentVersion := strings.TrimPrefix(versionConstraints, "==")
-		currentVer := utils.ParseVersion(currentVersion)
-
-		// Check if the current version is valid
-		if !currentVer.IsValid {
-			return false, currentVer.Error
+		currentVer, err := pyver.Parse(currentVersion)
+		if err != nil {
+			return false, err
 		}
-
-		shouldUpdate = latestVer.IsGreaterThan(currentVer)
+		shouldUpdate = pyver.Compare(latestVer, currentVer) > 0
 	} else if strings.HasPrefix(versionConstraints, ">=") ||
 		strings.HasPrefix(versionConstraints, ">") ||
 		strings.HasPrefix(versionConstraints, "<=") ||
@@ -514,35 +512,53 @@ func (u *Updater) checkVersionConstraints(latestVerStr, versionConstraints strin
 		strings.HasPrefix(versionConstraints, "~=") ||
 		strings.HasPrefix(versionConstraints, "^") {
 		// Handle other constraints
-		shouldUpdate = latestVer.IsCompatible(versionConstraints)
+		shouldUpdate = pyverCompatible(latestVer, versionConstraints)
 	} else {
 		// Default to simple version comparison
-		currentVer := utils.ParseVersion(versionConstraints)
-
-		// Check if the current version is valid
-		if !currentVer.IsValid {
-			return false, currentVer.Error
+		currentVer, err := pyver.Parse(versionConstraints)
+		if err != nil {
+			return false, err
 		}
-
-		shouldUpdate = latestVer.IsGreaterThan(currentVer)
+		shouldUpdate = pyver.Compare(latestVer, currentVer) > 0
 	}
 
 	return shouldUpdate, nil
 }
 
-func (u *Updater) checkCompatibleRelease(v *utils.Version, constraint string) (bool, error) {
-	// ~= operator (compatible release)
-	specifierVersion := strings.TrimPrefix(constraint, "~=")
-
-	// Parse the specifier version
-	specVer := utils.ParseVersion(specifierVersion)
-
-	// Compatible release must have:
-	// 1. Same major version
-	// 2. Either higher minor version, or same minor and higher or equal patch
-	return v.Parts[0] == specVer.Parts[0] &&
-		(v.Parts[1] > specVer.Parts[1] ||
-			(v.Parts[1] == specVer.Parts[1] && v.Parts[2] >= specVer.Parts[2])), nil
+// pyverCompatible checks if a version satisfies a constraint (basic support for ==, >=, >, <=, <, ~=)
+func pyverCompatible(ver pyver.Version, constraint string) bool {
+	constraint = strings.TrimSpace(constraint)
+	if strings.HasPrefix(constraint, "==") {
+		cver, err := pyver.Parse(strings.TrimPrefix(constraint, "=="))
+		return err == nil && pyver.Compare(ver, cver) == 0
+	} else if strings.HasPrefix(constraint, ">=") {
+		cver, err := pyver.Parse(strings.TrimPrefix(constraint, ">="))
+		return err == nil && pyver.Compare(ver, cver) >= 0
+	} else if strings.HasPrefix(constraint, ">") {
+		cver, err := pyver.Parse(strings.TrimPrefix(constraint, ">"))
+		return err == nil && pyver.Compare(ver, cver) > 0
+	} else if strings.HasPrefix(constraint, "<=") {
+		cver, err := pyver.Parse(strings.TrimPrefix(constraint, "<="))
+		return err == nil && pyver.Compare(ver, cver) <= 0
+	} else if strings.HasPrefix(constraint, "<") {
+		cver, err := pyver.Parse(strings.TrimPrefix(constraint, "<"))
+		return err == nil && pyver.Compare(ver, cver) < 0
+	} else if strings.HasPrefix(constraint, "~=") {
+		// Compatible release: ~=1.4 means >=1.4, ==1.*
+		base := strings.TrimPrefix(constraint, "~=")
+		cver, err := pyver.Parse(base)
+		if err != nil || len(cver.Release) < 2 || len(ver.Release) < 2 {
+			return false
+		}
+		if ver.Release[0] != cver.Release[0] {
+			return false
+		}
+		if ver.Release[1] < cver.Release[1] {
+			return false
+		}
+		return pyver.Compare(ver, cver) >= 0
+	}
+	return false
 }
 
 func (u *Updater) updatePackageJsonFile(filePath string) error {
