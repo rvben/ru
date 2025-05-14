@@ -7,10 +7,9 @@ import (
 	"testing"
 )
 
-func runAlignerTest(t *testing.T, tmpDir string, useWildcard bool) func(files []string, expected map[string]string) {
+func runAlignerTest(t *testing.T, tmpDir string) func(files []string, expected map[string]string) {
 	return func(files []string, expected map[string]string) {
 		aligner := NewAligner()
-		aligner.UseWildcard = useWildcard
 		if err := aligner.collectFilesToProcess(tmpDir); err != nil {
 			t.Fatalf("collectFilesToProcess failed: %v", err)
 		}
@@ -58,10 +57,8 @@ func TestAlignerWildcardVersion(t *testing.T) {
 		files[i] = filePath
 	}
 
-	// Default: expect concrete version
-	runAlignerTest(t, tmpDir, false)(files, map[string]string{"rdflib": "==7.1.0"})
-	// Wildcard: expect wildcard
-	runAlignerTest(t, tmpDir, true)(files, map[string]string{"rdflib": "==7.1.*"})
+	// Only expect concrete version
+	runAlignerTest(t, tmpDir)(files, map[string]string{"rdflib": "==7.1.0"})
 }
 
 func TestAlignerComplexVersions(t *testing.T) {
@@ -92,19 +89,12 @@ func TestAlignerComplexVersions(t *testing.T) {
 		files[i] = filePath
 	}
 
-	// Default: expect concrete versions
-	runAlignerTest(t, tmpDir, false)(files, map[string]string{
+	// Only expect concrete versions
+	runAlignerTest(t, tmpDir)(files, map[string]string{
 		"foo": "foo==1.2.0",
 		"bar": "bar==2.0.0",
 		"baz": "baz==3.1.0.post1",
 		"qux": "qux==4.2.0",
-	})
-	// Wildcard: expect wildcards where present
-	runAlignerTest(t, tmpDir, true)(files, map[string]string{
-		"foo": "foo==1.2.0",
-		"bar": "bar==2.0.0",
-		"baz": "baz==3.1.0.post1",
-		"qux": "qux==4.2.*",
 	})
 }
 
@@ -134,8 +124,6 @@ func TestAlignerUrllib3VersionOrder(t *testing.T) {
 		paths[i] = filePath
 	}
 
-	// Default: expect highest concrete version
-	runAlignerTest(t, tmpDir, false)(paths, map[string]string{"urllib3": "urllib3==2.2.3"})
-	// Wildcard: expect highest concrete version (no wildcard present)
-	runAlignerTest(t, tmpDir, true)(paths, map[string]string{"urllib3": "urllib3==2.2.3"})
+	// Only expect highest concrete version
+	runAlignerTest(t, tmpDir)(paths, map[string]string{"urllib3": "urllib3==2.2.3"})
 }

@@ -248,7 +248,8 @@ dependencies = { requests = "^2.31.0" }`,
 			}
 
 			// Create an updater with mock PyPI
-			mockPyPI := &MockPackageManager{
+			updater := New(false, false, []string{"."})
+			updater.pypi = &MockPackageManager{
 				getLatestVersionFunc: func(pkg string) (string, error) {
 					if version, ok := tt.versions[pkg]; ok {
 						return version, nil
@@ -256,7 +257,6 @@ dependencies = { requests = "^2.31.0" }`,
 					return "", fmt.Errorf("package %s not found", pkg)
 				},
 			}
-			updater := NewUpdater(mockPyPI)
 
 			// Process the directory
 			if err := updater.ProcessDirectory("."); (err != nil) != tt.wantErr {
@@ -669,5 +669,48 @@ func TestDryRunSummaryOutput(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "Would update") && !strings.Contains(output, "No updates would be made") {
 		t.Errorf("Dry run summary output missing or incorrect. Got: %q", output)
+	}
+}
+
+func TestUpdateRequirementsFileWithWildcards(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "test-wildcard")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "requirements.txt")
+	content := `rdflib==7.1.*
+foo==1.0.0
+`
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	mockPyPI := &MockPackageManager{
+		getLatestVersionFunc: func(pkg string) (string, error) {
+			if pkg == "rdflib" {
+				return "7.1.3", nil
+			}
+			if pkg == "foo" {
+				return "1.2.0", nil
+			}
+			return "", fmt.Errorf("package %s not found", pkg)
+		},
+	}
+
+	// Default: should concretize wildcard
+	updater := New(true, false, []string{tempDir})
+	updater.pypi = mockPyPI
+	if err := updater.ProcessDirectory(tempDir); err != nil {
+		t.Fatalf("ProcessDirectory failed: %v", err)
+	}
+	updatedContent, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("Failed to read updated file: %v", err)
+	}
+	expected := "rdflib==7.1.3\nfoo==1.2.0\n"
+	if string(updatedContent) != expected {
+		t.Errorf("Wildcard should be concretized.\nExpected:\n%q\nGot:\n%q", expected, string(updatedContent))
 	}
 }

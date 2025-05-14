@@ -59,7 +59,7 @@ func (u *Updater) Run() error {
 
 		// If it's a file, handle it directly
 		if !pathInfo.IsDir() {
-			utils.VerboseLog("Processing file directly:", path)
+			utils.Debug("update", "Processing file directly: %s", path)
 			ext := strings.ToLower(filepath.Ext(path))
 			filename := filepath.Base(path)
 
@@ -87,17 +87,17 @@ func (u *Updater) Run() error {
 			// Try to load .gitignore file from the path
 			gitignorePath := filepath.Join(path, ".gitignore")
 			if _, err := os.Stat(gitignorePath); err == nil {
-				utils.VerboseLog("Loading .gitignore from", gitignorePath)
+				utils.Debug("update", "Loading .gitignore from %s", gitignorePath)
 				ignorer, err := ignore.CompileIgnoreFile(gitignorePath)
 				if err != nil {
-					utils.VerboseLog("Error loading .gitignore:", err)
+					utils.Debug("update", "Error loading .gitignore: %v", err)
 				} else {
 					u.ignorer = ignorer
 				}
 			}
 		}
 
-		utils.VerboseLog("Processing directory:", path)
+		utils.Debug("update", "Processing directory: %s", path)
 		if err := u.ProcessDirectory(path); err != nil {
 			return err
 		}
@@ -137,9 +137,9 @@ func (u *Updater) ProcessDirectory(dir string) error {
 	}
 
 	// Log counts
-	utils.VerboseLog("Found", len(requirementsFiles), "requirements files")
-	utils.VerboseLog("Found", len(packageJSONFiles), "package.json files")
-	utils.VerboseLog("Found", len(pyprojectFiles), "pyproject.toml files")
+	utils.Debug("update", "Found %d requirements files", len(requirementsFiles))
+	utils.Debug("update", "Found %d package.json files", len(packageJSONFiles))
+	utils.Debug("update", "Found %d pyproject.toml files", len(pyprojectFiles))
 
 	// Process all found files
 	var wg sync.WaitGroup
@@ -224,7 +224,7 @@ func (u *Updater) processFilesParallel(requirementsFiles, packageJSONFiles, pypr
 	if numWorkers > numFiles {
 		numWorkers = numFiles
 	}
-	utils.VerboseLog("Using", numWorkers, "workers for parallel processing")
+	utils.Debug("update", "Using %d workers for parallel processing", numWorkers)
 
 	// Start workers
 	var wg sync.WaitGroup
@@ -349,7 +349,7 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 		// Get latest version
 		latestVersion, err := u.pypi.GetLatestVersion(packageName)
 		if err != nil {
-			utils.VerboseLog("Error getting latest version for %s: %v", packageName, err)
+			utils.Debug("update", "Error getting latest version for %s: %v", packageName, err)
 			// If there's an error, keep the original line
 			results = append(results, result{line: line, updatedLine: line, lineNumber: i, packageName: packageName, versionConstraints: versionConstraints})
 			continue
@@ -360,13 +360,22 @@ func (u *Updater) updateRequirementsFile(filePath string) error {
 
 		// Check if update is needed and allowed
 		if versionConstraints != "" {
+			// Always concretize wildcards for '=='
+			if strings.HasPrefix(versionConstraints, "==") && strings.Contains(strings.TrimPrefix(versionConstraints, "=="), "*") {
+				updatedLine, err := u.updateLine(line, packageName, versionConstraints, latestVersion)
+				if err != nil {
+					return fmt.Errorf("%s:%d: %w", filePath, i+1, err)
+				}
+				results = append(results, result{line: line, updatedLine: updatedLine, lineNumber: i, packageName: packageName, versionConstraints: versionConstraints})
+				continue
+			}
 			isAllowed, err := u.checkVersionConstraints(latestVersion, versionConstraints)
 			if err != nil || !isAllowed {
 				// If update is not allowed, keep the original line
 				if err != nil {
-					utils.VerboseLog("Error checking constraints for %s: %v", packageName, err)
+					utils.Debug("update", "Error checking constraints for %s: %v", packageName, err)
 				} else {
-					utils.VerboseLog("Update not allowed for %s due to constraints", packageName)
+					utils.Debug("update", "Update not allowed for %s due to constraints", packageName)
 				}
 				results = append(results, result{line: line, updatedLine: line, lineNumber: i, packageName: packageName, versionConstraints: versionConstraints})
 				continue
@@ -445,6 +454,10 @@ func (u *Updater) updateLine(line, packageName, versionConstraints, latestVersio
 	if versionConstraints != "" {
 		if strings.HasPrefix(versionConstraints, "==") {
 			currentVersion := strings.TrimPrefix(versionConstraints, "==")
+			// Always concretize wildcards
+			if strings.Contains(currentVersion, "*") {
+				return fmt.Sprintf("%s==%s", packageName, latestVersion), nil
+			}
 			if currentVersion != latestVersion {
 				return fmt.Sprintf("%s==%s", packageName, latestVersion), nil
 			}
@@ -457,11 +470,11 @@ func (u *Updater) updateLine(line, packageName, versionConstraints, latestVersio
 		}
 		if !ok {
 			// If version doesn't match constraints, keep the original line
-			utils.VerboseLog(fmt.Sprintf("Warning: Latest version %s for package %s is not within the specified range (%s)", latestVersion, packageName, versionConstraints))
+			utils.Debug("update", "Warning: Latest version %s for package %s is not within the specified range (%s)", latestVersion, packageName, versionConstraints)
 			return line, nil
 		}
 		// If version matches constraints, keep using the constraints
-		utils.VerboseLog("Latest version is within the specified range:", latestVersion)
+		utils.Debug("update", "Latest version is within the specified range: %s", latestVersion)
 		return line, nil
 	}
 	// No version constraints, always update to latest
@@ -602,7 +615,7 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 		// Get the latest version
 		latestVersion, err := u.npm.GetLatestVersion(name)
 		if err != nil {
-			utils.VerboseLog("Error getting latest version for %s: %v", name, err)
+			utils.Debug("update", "Error getting latest version for %s: %v", name, err)
 			continue
 		}
 
@@ -638,7 +651,7 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 		// Get the latest version
 		latestVersion, err := u.npm.GetLatestVersion(name)
 		if err != nil {
-			utils.VerboseLog("Error getting latest version for %s: %v", name, err)
+			utils.Debug("update", "Error getting latest version for %s: %v", name, err)
 			continue
 		}
 
@@ -723,7 +736,7 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 	re := regexp.MustCompile(`(?m)"([a-zA-Z0-9_.-]+)(?:\[[a-zA-Z0-9_,.-]+\])?(?:==|>=|<=|!=|~=|>|<|===)([^"]+)"`)
 
 	matches := re.FindAllStringSubmatch(string(content), -1)
-	utils.VerboseLog("Found", len(matches), "potential packages in the TOML file")
+	utils.Debug("update", "Found %d potential packages in the TOML file", len(matches))
 
 	// Process all matches
 	for _, match := range matches {
@@ -742,11 +755,11 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 		// Use the package manager to get the latest version
 		latestVersion, err := u.pypi.GetLatestVersion(pkgName)
 		if err != nil {
-			utils.VerboseLog("Package not found:", pkgName, "(keeping current version)")
+			utils.Debug("update", "Package not found: %s (keeping current version)", pkgName)
 			continue
 		}
 
-		utils.VerboseLog("Found package", pkgName, "latest version:", latestVersion)
+		utils.Debug("update", "Found package %s latest version: %s", pkgName, latestVersion)
 		packageVersionMap[pkgName] = latestVersion
 	}
 
@@ -815,11 +828,11 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 		// Use the package manager to get the latest version
 		latestVersion, err := u.pypi.GetLatestVersion(pkgName)
 		if err != nil {
-			utils.VerboseLog("Package not found:", pkgName, "(keeping current version)")
+			utils.Debug("update", "Package not found: %s (keeping current version)", pkgName)
 			continue
 		}
 
-		utils.VerboseLog("Found package", pkgName, "latest version:", latestVersion)
+		utils.Debug("update", "Found package %s latest version: %s", pkgName, latestVersion)
 		packageVersionMap[pkgName] = latestVersion
 	}
 
@@ -853,12 +866,12 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 }
 
 func (u *Updater) verifyRequirements(filePath string, updatedContent string) error {
-	utils.VerboseLog("Verifying dependencies for:", filePath)
+	utils.Debug("update", "Verifying dependencies for: %s", filePath)
 
 	// Check if uv is available
 	_, err := exec.LookPath("uv")
 	useUV := err == nil
-	utils.VerboseLog("Using", map[bool]string{true: "uv", false: "pip"}[useUV], "for dependency verification")
+	utils.Debug("update", "Using %s for dependency verification", map[bool]string{true: "uv", false: "pip"}[useUV])
 
 	// Create a temporary directory for venv
 	tmpDir, err := os.MkdirTemp("", "ru-verify-*")
@@ -989,7 +1002,7 @@ func (u *Updater) getLatestVersions(filePath string, versions map[string]string)
 		for _, prefix := range []string{"==", ">=", "<=", "!=", "~=", ">", "<", "==="} {
 			if idx := strings.Index(line, prefix); idx > 0 {
 				packageName = strings.TrimSpace(line[:idx])
-				utils.VerboseLog("Found package:", packageName, "with version specifier:", prefix)
+				utils.Debug("update", "Found package: %s with version specifier: %s", packageName, prefix)
 				packageCount++
 				break
 			}
@@ -1002,18 +1015,18 @@ func (u *Updater) getLatestVersions(filePath string, versions map[string]string)
 				basePackageName = packageName[:idx]
 			}
 
-			utils.VerboseLog("Getting latest version for package:", basePackageName)
+			utils.Debug("update", "Getting latest version for package: %s", basePackageName)
 			if version, err := u.pypi.GetLatestVersion(basePackageName); err == nil {
 				versions[basePackageName] = version
-				utils.VerboseLog("Found latest version for", basePackageName, ":", version)
+				utils.Debug("update", "Found latest version for %s: %s", basePackageName, version)
 			} else {
-				utils.VerboseLog("Error getting latest version for", basePackageName, ":", err)
+				utils.Debug("update", "Error getting latest version for %s: %v", basePackageName, err)
 				fmt.Printf("Warning: Package not found: %s (keeping current version)\n", basePackageName)
 			}
 		}
 	}
 
-	utils.VerboseLog("Found", packageCount, "packages in", filePath)
+	utils.Debug("update", "Found %d packages in %s", packageCount, filePath)
 	return nil
 }
 
@@ -1025,7 +1038,7 @@ func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, 
 		return nil, nil, nil, fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
-	utils.VerboseLog("Searching for dependency files in:", absDir)
+	utils.Debug("update", "Searching for dependency files in: %s", absDir)
 
 	// Common requirements patterns
 	reqPatterns := []string{
@@ -1050,7 +1063,7 @@ func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, 
 		// Skip directories that are in .gitignore
 		if info.IsDir() {
 			if u.ignorer != nil && u.ignorer.MatchesPath(path) {
-				utils.VerboseLog("Ignoring directory:", path)
+				utils.Debug("update", "Ignoring directory: %s", path)
 				return filepath.SkipDir
 			}
 			return nil
@@ -1062,7 +1075,7 @@ func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, 
 			return err
 		}
 		if u.ignorer != nil && u.ignorer.MatchesPath(relPath) {
-			utils.VerboseLog("Ignoring file:", relPath)
+			utils.Debug("update", "Ignoring file: %s", relPath)
 			return nil
 		}
 
@@ -1074,7 +1087,7 @@ func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, 
 				return err
 			}
 			if matched {
-				utils.VerboseLog("Found requirements file:", path)
+				utils.Debug("update", "Found requirements file: %s", path)
 				requirements = append(requirements, path)
 				break
 			}
@@ -1082,13 +1095,13 @@ func (u *Updater) findRequirementsFiles(dir string) (requirements, packageJSON, 
 
 		// Check if the file is a package.json file
 		if filename == "package.json" {
-			utils.VerboseLog("Found package.json file:", path)
+			utils.Debug("update", "Found package.json file: %s", path)
 			packageJSON = append(packageJSON, path)
 		}
 
 		// Check if the file is a pyproject.toml file
 		if filename == "pyproject.toml" {
-			utils.VerboseLog("Found pyproject.toml file:", path)
+			utils.Debug("update", "Found pyproject.toml file: %s", path)
 			pyproject = append(pyproject, path)
 		}
 
@@ -1129,7 +1142,7 @@ func (u *Updater) processPyProjectFile(filePath string) error {
 	re := regexp.MustCompile(`(?m)"([a-zA-Z0-9_.-]+)(?:\[[a-zA-Z0-9_,.-]+\])?(?:==|>=|<=|!=|~=|>|<|===)([^"]+)"`)
 
 	matches := re.FindAllStringSubmatch(string(content), -1)
-	utils.VerboseLog("Found", len(matches), "potential packages in the TOML file")
+	utils.Debug("update", "Found %d potential packages in the TOML file", len(matches))
 
 	// Process all matches
 	for _, match := range matches {
@@ -1148,11 +1161,11 @@ func (u *Updater) processPyProjectFile(filePath string) error {
 		// Use the package manager to get the latest version
 		latestVersion, err := u.pypi.GetLatestVersion(pkgName)
 		if err != nil {
-			utils.VerboseLog("Package not found:", pkgName, "(keeping current version)")
+			utils.Debug("update", "Package not found: %s (keeping current version)", pkgName)
 			continue
 		}
 
-		utils.VerboseLog("Found package", pkgName, "latest version:", latestVersion)
+		utils.Debug("update", "Found package %s latest version: %s", pkgName, latestVersion)
 		packageVersionMap[pkgName] = latestVersion
 	}
 
@@ -1221,11 +1234,11 @@ func (u *Updater) processPyProjectFile(filePath string) error {
 		// Use the package manager to get the latest version
 		latestVersion, err := u.pypi.GetLatestVersion(pkgName)
 		if err != nil {
-			utils.VerboseLog("Package not found:", pkgName, "(keeping current version)")
+			utils.Debug("update", "Package not found: %s (keeping current version)", pkgName)
 			continue
 		}
 
-		utils.VerboseLog("Found package", pkgName, "latest version:", latestVersion)
+		utils.Debug("update", "Found package %s latest version: %s", pkgName, latestVersion)
 		packageVersionMap[pkgName] = latestVersion
 	}
 

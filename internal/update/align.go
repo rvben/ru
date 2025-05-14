@@ -28,7 +28,6 @@ type Aligner struct {
 	modulesUpdated int
 	ignorer        *ignore.GitIgnore
 	filesToProcess []string
-	UseWildcard    bool // If true, prefer wildcards when aligning
 }
 
 func NewAligner() *Aligner {
@@ -39,12 +38,6 @@ func NewAligner() *Aligner {
 }
 
 func (a *Aligner) Run() error {
-	for _, arg := range os.Args {
-		if arg == "--wildcard" {
-			a.UseWildcard = true
-		}
-	}
-
 	// Load .gitignore file
 	ignoreFile := filepath.Join(".", ".gitignore")
 	if _, err := os.Stat(ignoreFile); err == nil {
@@ -160,14 +153,10 @@ func (a *Aligner) collectVersionsFromFiles() error {
 		}
 	}
 
-	// After collecting, set a.pythonVersions to the true highest version (wildcard or concrete)
+	// After collecting, set a.pythonVersions to the true highest version (concrete only)
 	for pkg, vi := range versionMap {
-		if a.UseWildcard && vi.highestWildcard != "" {
-			a.pythonVersions[pkg] = vi.highestWildcard
-		} else if vi.highestConcrete != "" {
+		if vi.highestConcrete != "" {
 			a.pythonVersions[pkg] = vi.highestConcrete
-		} else if vi.highestWildcard != "" {
-			a.pythonVersions[pkg] = vi.highestWildcard
 		}
 	}
 
@@ -229,17 +218,23 @@ func (a *Aligner) scanPythonVersions(filePath string, versionMap map[string]*ver
 				}
 			} else {
 				// Track highest concrete
+				v1, err1 := pyver.Parse(version)
+				if err1 != nil {
+					utils.Warning("Skipping unparsable version for %s: %s", pkg, version)
+					continue
+				}
 				if vi.highestConcrete == "" {
 					vi.highestConcrete = version
 					utils.Debug("align", "[align] Set initial highest concrete for %s: %s", pkg, version)
 				} else {
-					v1, err1 := pyver.Parse(version)
 					v2, err2 := pyver.Parse(vi.highestConcrete)
-					utils.Debug("align", "[align] Comparing concretes for %s: %s vs %s", pkg, version, vi.highestConcrete)
-					if err1 != nil || err2 != nil {
-						utils.Debug("align", "[align] Could not parse concrete version(s): %s %s err1: %v err2: %v", version, vi.highestConcrete, err1, err2)
+					if err2 != nil {
+						utils.Warning("Skipping unparsable highestConcrete for %s: %s", pkg, vi.highestConcrete)
+						vi.highestConcrete = version
+						continue
 					}
-					if err1 == nil && err2 == nil && pyver.Compare(v1, v2) > 0 {
+					utils.Debug("align", "[align] Comparing concretes for %s: %s vs %s", pkg, version, vi.highestConcrete)
+					if pyver.Compare(v1, v2) > 0 {
 						utils.Debug("align", "[align] Updating highest concrete for %s to %s", pkg, version)
 						vi.highestConcrete = version
 					}
@@ -321,12 +316,9 @@ func (a *Aligner) alignPythonFile(filePath string) error {
 		if len(matches) >= 2 {
 			pkg := matches[1]
 			if version, ok := a.pythonVersions[pkg]; ok {
-				newLine := fmt.Sprintf("%s==%s", pkg, version)
-				if newLine != line {
-					lines[i] = newLine
-					updated = true
-					a.modulesUpdated++
-				}
+				lines[i] = fmt.Sprintf("%s==%s", pkg, version)
+				updated = true
+				a.modulesUpdated++
 			}
 		}
 	}
