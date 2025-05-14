@@ -7,8 +7,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/rvben/pyver v0.0.0-20250514121448-23252a8b7d72 h1:Fc5jhyn3710YKBn9D11rkt5FMVSlQwqHxPoNySX99sQ=
-github.com/rvben/pyver v0.0.0-20250514121448-23252a8b7d72/go.mod h1:uiXO3h+pQk6pfWLsvEQBGWGipeOoBVoA4Utpt5u+xfc=
+github.com/rvben/pyver v0.1.0 h1:IV2Dc1dMKt8BYswjVkPOCaJ0CfDyWgqKnIFo3UeNz6s=
+github.com/rvben/pyver v0.1.0/go.mod h1:uiXO3h+pQk6pfWLsvEQBGWGipeOoBVoA4Utpt5u+xfc=
 github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 h1:OkMGxebDjyw0ULyrTYWeN0UNCCkmCWfjPnIA2W6oviI=
 github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06/go.mod h1:+ePHsJ1keEjQtpvf9HHw0f4ZeJ0TLRsxhunSI2hYJSs=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
