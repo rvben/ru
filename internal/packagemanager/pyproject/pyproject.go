@@ -767,6 +767,19 @@ func updateDependenciesInTOML(content, section, key string, dependencies []strin
 	// Extract the old dependencies list for formatting reference
 	oldDepsList := content[keyIndex : endBracketPos+1]
 
+	// Detect if the original file had trailing commas and format style
+	hasTrailingComma := false
+	isMultiLine := strings.Contains(oldDepsList, "\n")
+
+	if isMultiLine {
+		// For multi-line arrays, always use trailing commas (uv standard)
+		hasTrailingComma = true
+	} else {
+		// For single-line arrays, check if there's a comma before the closing bracket
+		// Look for pattern like ["package",] or ["package1","package2",]
+		hasTrailingComma = strings.Contains(oldDepsList, ",]")
+	}
+
 	// Extract the indentation style from the original content
 	// Default to 4 spaces if we can't determine it
 	indentation := "    "
@@ -790,16 +803,42 @@ func updateDependenciesInTOML(content, section, key string, dependencies []strin
 
 	// Construct the new dependencies list with proper formatting
 	var newDepsBuilder strings.Builder
-	newDepsBuilder.WriteString(fmt.Sprintf("%s = [\n", key))
 
-	for _, dep := range dependencies {
-		newDepsBuilder.WriteString(indentation)
+	if !isMultiLine && len(dependencies) == 1 {
+		// Preserve single-line format for single dependencies
+		newDepsBuilder.WriteString(fmt.Sprintf("%s = [", key))
 		newDepsBuilder.WriteString("\"")
-		newDepsBuilder.WriteString(dep)
-		newDepsBuilder.WriteString("\",\n") // Always add a comma
-	}
+		newDepsBuilder.WriteString(dependencies[0])
+		newDepsBuilder.WriteString("\"")
+		if hasTrailingComma {
+			newDepsBuilder.WriteString(",")
+		}
+		newDepsBuilder.WriteString("]")
+	} else {
+		// Use multi-line format
+		newDepsBuilder.WriteString(fmt.Sprintf("%s = [\n", key))
 
-	newDepsBuilder.WriteString("]")
+		for i, dep := range dependencies {
+			newDepsBuilder.WriteString(indentation)
+			newDepsBuilder.WriteString("\"")
+			newDepsBuilder.WriteString(dep)
+			newDepsBuilder.WriteString("\"")
+
+			// Add comma based on original style
+			if i < len(dependencies)-1 {
+				// Always add comma for non-last items
+				newDepsBuilder.WriteString(",")
+			} else {
+				// For the last item, only add comma if original had trailing commas
+				if hasTrailingComma {
+					newDepsBuilder.WriteString(",")
+				}
+			}
+			newDepsBuilder.WriteString("\n")
+		}
+
+		newDepsBuilder.WriteString("]")
+	}
 
 	newDepsList := newDepsBuilder.String()
 
