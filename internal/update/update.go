@@ -60,24 +60,26 @@ func (u *Updater) Run() error {
 		// If it's a file, handle it directly
 		if !pathInfo.IsDir() {
 			utils.Debug("update", "Processing file directly: %s", path)
-			ext := strings.ToLower(filepath.Ext(path))
-			filename := filepath.Base(path)
+			fileType, err := u.detectFileType(path)
+			if err != nil {
+				return fmt.Errorf("failed to detect file type for %s: %w", path, err)
+			}
 
-			switch {
-			case ext == ".txt" || strings.Contains(strings.ToLower(filename), "requirements"):
+			switch fileType {
+			case "requirements":
 				if err := u.updateRequirementsFile(path); err != nil {
 					return fmt.Errorf("failed to update requirements file %s: %w", path, err)
 				}
-			case filename == "package.json":
+			case "package.json":
 				if err := u.updatePackageJsonFile(path); err != nil {
 					return fmt.Errorf("failed to update package.json file %s: %w", path, err)
 				}
-			case ext == ".toml" || strings.Contains(strings.ToLower(filename), "pyproject"):
+			case "pyproject.toml":
 				if err := u.updatePyProjectFile(path); err != nil {
 					return fmt.Errorf("failed to update pyproject.toml file %s: %w", path, err)
 				}
 			default:
-				return fmt.Errorf("unsupported file type: %s", path)
+				return fmt.Errorf("unsupported file type: %s (detected as: %s)", path, fileType)
 			}
 			continue
 		}
@@ -588,14 +590,14 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 	}
 
 	// Check for dependencies
-	dependencies, ok := packageJSON["dependencies"].(map[string]interface{})
-	if !ok {
+	dependencies, hasDependencies := packageJSON["dependencies"].(map[string]interface{})
+	if !hasDependencies {
 		dependencies = make(map[string]interface{})
 	}
 
 	// Check for devDependencies
-	devDependencies, ok := packageJSON["devDependencies"].(map[string]interface{})
-	if !ok {
+	devDependencies, hasDevDependencies := packageJSON["devDependencies"].(map[string]interface{})
+	if !hasDevDependencies {
 		devDependencies = make(map[string]interface{})
 	}
 
@@ -677,9 +679,13 @@ func (u *Updater) updatePackageJsonFile(filePath string) error {
 		return nil
 	}
 
-	// Update the package.json
-	packageJSON["dependencies"] = dependencies
-	packageJSON["devDependencies"] = devDependencies
+	// Update the package.json - only set fields that originally existed or have updates
+	if hasDependencies || len(updatedDeps) > 0 {
+		packageJSON["dependencies"] = dependencies
+	}
+	if hasDevDependencies || len(updatedDevDeps) > 0 {
+		packageJSON["devDependencies"] = devDependencies
+	}
 
 	// Marshal back to JSON with indentation
 	updatedJSON, err := json.MarshalIndent(packageJSON, "", "  ")
@@ -845,10 +851,8 @@ func (u *Updater) updatePyProjectFile(filePath string) error {
 	// Update statistics
 	if len(updatedModules) > 0 {
 		if !u.dryRun {
-			// Save changes to the file
-			if err := pyproj.Save(); err != nil {
-				return fmt.Errorf("failed to save pyproject.toml: %w", err)
-			}
+			// File is already saved by LoadAndUpdate method
+			// No need to call Save() again as it would rebuild the entire file
 		} else {
 			// In dry run mode, just log what would be done
 			utils.Info("dry-run", "Would update file: %s", filePath)
@@ -1251,10 +1255,8 @@ func (u *Updater) processPyProjectFile(filePath string) error {
 	// Update statistics
 	if len(updatedModules) > 0 {
 		if !u.dryRun {
-			// Save changes to the file
-			if err := pyproj.Save(); err != nil {
-				return fmt.Errorf("failed to save pyproject.toml: %w", err)
-			}
+			// File is already saved by LoadAndUpdate method
+			// No need to call Save() again as it would rebuild the entire file
 		} else {
 			// In dry run mode, just log what would be done
 			utils.Info("dry-run", "Would update file: %s", filePath)
@@ -1288,4 +1290,170 @@ func findNextSection(content string, start int) int {
 // SetDryRun sets the dryRun mode for the updater.
 func (u *Updater) SetDryRun(dryRun bool) {
 	u.dryRun = dryRun
+}
+
+// detectFileType intelligently detects the type of dependency file based on filename, extension, and content
+func (u *Updater) detectFileType(filePath string) (string, error) {
+	filename := filepath.Base(filePath)
+	ext := strings.ToLower(filepath.Ext(filePath))
+	filenameLC := strings.ToLower(filename)
+
+	// First, try to detect by filename patterns
+
+	// Package.json detection - be more flexible
+	if strings.HasSuffix(filenameLC, "package.json") || filenameLC == "package.json" {
+		return "package.json", nil
+	}
+
+	// Pyproject.toml detection - be more flexible
+	if strings.HasSuffix(filenameLC, "pyproject.toml") || filenameLC == "pyproject.toml" {
+		return "pyproject.toml", nil
+	}
+
+	// Requirements file detection - multiple patterns
+	requirementsPatterns := []string{
+		"requirements.txt",
+		"requirements-*.txt",
+		"requirements_*.txt",
+		"*.requirements.txt",
+		"requirements-dev.txt",
+		"requirements_dev.txt",
+		"requirements-test.txt",
+		"requirements_test.txt",
+		"requirements-prod.txt",
+		"requirements_prod.txt",
+		"dev-requirements.txt",
+		"test-requirements.txt",
+		"prod-requirements.txt",
+	}
+
+	for _, pattern := range requirementsPatterns {
+		matched, err := filepath.Match(pattern, filenameLC)
+		if err != nil {
+			continue // Skip invalid patterns
+		}
+		if matched {
+			return "requirements", nil
+		}
+	}
+
+	// If filename contains "requirements" and has .txt extension, treat as requirements
+	if strings.Contains(filenameLC, "requirements") && ext == ".txt" {
+		return "requirements", nil
+	}
+
+	// If extension-based detection
+	switch ext {
+	case ".txt":
+		// For .txt files, try to detect by content
+		return u.detectFileTypeByContent(filePath)
+	case ".json":
+		// For .json files, check if it's a package.json by content
+		if u.isPackageJsonByContent(filePath) {
+			return "package.json", nil
+		}
+		return "unknown", fmt.Errorf("JSON file is not a package.json")
+	case ".toml":
+		// For .toml files, check if it's a pyproject.toml by content
+		if u.isPyProjectTomlByContent(filePath) {
+			return "pyproject.toml", nil
+		}
+		return "unknown", fmt.Errorf("TOML file is not a pyproject.toml")
+	}
+
+	return "unknown", fmt.Errorf("unable to detect file type")
+}
+
+// detectFileTypeByContent tries to detect file type by examining the content
+func (u *Updater) detectFileTypeByContent(filePath string) (string, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return "unknown", fmt.Errorf("failed to read file for content detection: %w", err)
+	}
+
+	contentStr := string(content)
+	lines := strings.Split(contentStr, "\n")
+
+	// Check if it looks like a requirements file
+	hasPackageLines := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Look for patterns that suggest this is a requirements file
+		if strings.Contains(line, "==") || strings.Contains(line, ">=") ||
+			strings.Contains(line, "<=") || strings.Contains(line, "~=") ||
+			strings.HasPrefix(line, "-i ") || strings.HasPrefix(line, "--index-url") ||
+			strings.HasPrefix(line, "--extra-index-url") {
+			hasPackageLines = true
+			break
+		}
+
+		// Simple package name pattern (letters, numbers, hyphens, underscores)
+		if regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(line) {
+			hasPackageLines = true
+			break
+		}
+	}
+
+	if hasPackageLines {
+		return "requirements", nil
+	}
+
+	return "unknown", fmt.Errorf("content does not match any known dependency file format")
+}
+
+// isPackageJsonByContent checks if a JSON file is a package.json by examining its structure
+func (u *Updater) isPackageJsonByContent(filePath string) bool {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return false
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(content, &data); err != nil {
+		return false
+	}
+
+	// Check for typical package.json fields
+	_, hasName := data["name"]
+	_, hasVersion := data["version"]
+	_, hasDependencies := data["dependencies"]
+	_, hasDevDependencies := data["devDependencies"]
+	_, hasScripts := data["scripts"]
+
+	// If it has name and version, or dependencies, it's likely a package.json
+	return (hasName && hasVersion) || hasDependencies || hasDevDependencies || hasScripts
+}
+
+// isPyProjectTomlByContent checks if a TOML file is a pyproject.toml by examining its structure
+func (u *Updater) isPyProjectTomlByContent(filePath string) bool {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return false
+	}
+
+	contentStr := string(content)
+
+	// Look for typical pyproject.toml sections
+	pyprojectSections := []string{
+		"[build-system]",
+		"[project]",
+		"[tool.poetry]",
+		"[tool.poetry.dependencies]",
+		"[project.dependencies]",
+		"[tool.setuptools]",
+		"[tool.hatch]",
+		"[tool.flit]",
+	}
+
+	for _, section := range pyprojectSections {
+		if strings.Contains(contentStr, section) {
+			return true
+		}
+	}
+
+	return false
 }
